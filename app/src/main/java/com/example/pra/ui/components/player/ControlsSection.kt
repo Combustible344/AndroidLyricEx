@@ -116,7 +116,8 @@ fun ControlsSection(
                 modifier = Modifier.size(72.dp)
             ) {
                 Icon(
-                    painter = painterResource(id = R.drawable.play_solid),
+                    painter = painterResource(
+                        id = if (state.isPlaying) R.drawable.pause_solid else R.drawable.play_solid),
                     contentDescription = "Play/Pause",
                     tint = Color.White,
                     modifier = Modifier.size(40.dp)

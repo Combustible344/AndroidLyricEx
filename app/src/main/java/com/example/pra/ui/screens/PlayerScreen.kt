@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -22,87 +25,102 @@ import com.example.pra.ui.components.player.BottomNavSection
 import com.example.pra.ui.components.player.ControlsSection
 import com.example.pra.ui.components.player.TopBarSection
 import com.example.pra.ui.components.player.TrackInfoSection
+import com.example.pra.ui.components.playlist.PlaylistBottomSheet // 引入组件
 import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 
 @Composable
 fun PlayerScreen(
-    // 注入 ViewModel (自动获取，不需要手动传)
     viewModel: MusicPlayerViewModel = viewModel()
 ) {
-    // 1. 收集 UI 状态 (StateFlow -> Compose State)
-    // 只要 ViewModel 里的 _uiState 变了，这里就会自动刷新
+    // 1. 收集 UI 状态
     val state by viewModel.uiState.collectAsState()
 
-    // 2. 最底层背景
+    // 2. 控制播放列表显示的本地状态
+    var showPlaylist by remember { mutableStateOf(false) }
+
+    // 3. 背景层
     AtmosphericFluidBackground {
 
-        // 3. 内容层
+        // 4. 主内容层
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .systemBarsPadding() // 避开状态栏和底部横条
-                .padding(horizontal = 24.dp), // 全局边距
+                .systemBarsPadding()
+                .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
-            // --- 区域 A: 顶部栏 ---
+            // --- A: TopBar ---
             Box(modifier = Modifier.padding(top = 16.dp)) {
                 TopBarSection(
-                    // 暂时没有功能绑定，预留着
                     onMoreClick = { /* TODO */ },
                     onMinimizeClick = { /* TODO */ }
                 )
             }
 
-            // [弹簧 1]
             Spacer(modifier = Modifier.weight(2f))
 
-            // --- 区域 B: 专辑封面 ---
+            // --- B: AlbumArt ---
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f) // 保持正方形
+                    .aspectRatio(1f)
             ) {
-                // 传入真实封面 URI
                 AlbumArtSection(coverUri = state.coverUri)
             }
 
-            // [弹簧 2] (使用 height 保持固定间距，或 weight 保持弹性)
             Spacer(modifier = Modifier.height(10.dp))
 
-            // --- 区域 C: 歌曲信息 ---
+            // --- C: TrackInfo ---
             Box(modifier = Modifier.fillMaxWidth()) {
                 TrackInfoSection(
-                    state = state, // 传入包含歌名歌手的 State
-                    onFavoriteClick = { /* TODO: 收藏功能 */ },
+                    state = state,
+                    onFavoriteClick = { /* TODO */ },
                 )
             }
 
-            // [弹簧 3]
             Spacer(modifier = Modifier.weight(0.5f))
 
-            // --- 区域 D: 核心控制区 ---
+            // --- D: Controls ---
             Column(modifier = Modifier.fillMaxWidth()) {
                 ControlsSection(
                     state = state,
-                    // --- 关键绑定：连接 ViewModel ---
                     onPlayPauseClick = { viewModel.togglePlayPause() },
                     onPrevClick = { viewModel.skipToPrevious() },
                     onNextClick = { viewModel.skipToNext() },
-                    onSeek = { /* TODO: 进度拖拽待实现 */ }
+                    onSeek = { progressValue ->
+                        viewModel.seekTo(progressValue)
+                    }
                 )
             }
 
-            // [弹簧 4]
             Spacer(modifier = Modifier.weight(0.5f))
 
-            // --- 区域 E: 底部导航 ---
+            // --- E: BottomNav ---
             Box(modifier = Modifier.padding(bottom = 16.dp)) {
                 BottomNavSection(
-                    onCommentClick = { /* TODO */ },
-                    onPlaylistClick = { /* TODO */ }
+                    currentMode = state.playMode, // 传入状态
+                    onModeClick = { viewModel.cyclePlayMode() },
+                    // --- 关键修改：点击列表按钮，打开 BottomSheet ---
+                    onPlaylistClick = { showPlaylist = true }
                 )
             }
         }
+    }
+
+    // --- 5. 播放列表弹窗 (显示时覆盖在界面之上) ---
+    if (showPlaylist) {
+        PlaylistBottomSheet(
+            playlist = state.playlist,           // 传入数据源
+            currentSongId = state.currentSongId, // 传入当前播放ID(用于高亮)
+            onDismissRequest = { showPlaylist = false }, // 点击遮罩/下滑关闭
+            onItemClick = { audio ->
+                // 点击切歌
+                viewModel.playSong(audio.id)
+                // 切歌后可以选择自动关闭列表，或者保持打开
+                // showPlaylist = false
+            }
+
+        )
     }
 }
