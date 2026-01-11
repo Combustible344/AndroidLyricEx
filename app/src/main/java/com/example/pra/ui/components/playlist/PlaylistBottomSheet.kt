@@ -8,7 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete // 引入删除图标
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -34,7 +34,6 @@ fun PlaylistBottomSheet(
     onScanClick: () -> Unit,
     onAddFileClick: () -> Unit,
     onBindLyricClick: (Audio) -> Unit,
-    // --- 新增：删除回调 ---
     onRemoveClick: (Audio) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -51,11 +50,9 @@ fun PlaylistBottomSheet(
                 .fillMaxWidth()
                 .fillMaxHeight(0.7f)
         ) {
-            // 1. 顶部操作栏
+            // 顶部操作区
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -65,34 +62,21 @@ fun PlaylistBottomSheet(
                     color = Color.White,
                     fontWeight = FontWeight.Bold
                 )
-
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    SmallIconButton(
-                        icon = Icons.Default.Refresh,
-                        text = "扫描",
-                        onClick = onScanClick
-                    )
-                    SmallIconButton(
-                        icon = Icons.Default.Add,
-                        text = "添加",
-                        onClick = onAddFileClick
-                    )
+                    SmallIconButton(Icons.Default.Refresh, "扫描", onScanClick)
+                    SmallIconButton(Icons.Default.Add, "添加", onAddFileClick)
                 }
             }
 
             HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
 
-            // 2. 列表
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
                 items(playlist, key = { it.id }) { audio ->
                     PlaylistItem(
                         audio = audio,
                         isPlaying = audio.id == currentSongId,
                         onClick = { onItemClick(audio) },
                         onLyricClick = { onBindLyricClick(audio) },
-                        // 传递删除事件
                         onRemoveClick = { onRemoveClick(audio) }
                     )
                 }
@@ -101,7 +85,6 @@ fun PlaylistBottomSheet(
     }
 }
 
-// 辅助组件：顶部的小按钮 (保持不变)
 @Composable
 fun SmallIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
     Row(
@@ -124,7 +107,6 @@ fun PlaylistItem(
     isPlaying: Boolean,
     onClick: () -> Unit,
     onLyricClick: () -> Unit,
-    // 新增参数
     onRemoveClick: () -> Unit
 ) {
     Row(
@@ -134,25 +116,18 @@ fun PlaylistItem(
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 封面
         AsyncImage(
             model = audio.albumArtUri,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.DarkGray)
+            modifier = Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(Color.DarkGray)
         )
-
         Spacer(modifier = Modifier.width(16.dp))
 
-        // 文字信息 (靠高亮颜色指示正在播放)
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = audio.title,
                 style = MaterialTheme.typography.bodyLarge,
-                // 正在播放时显示亮蓝色，否则显示白色
                 color = if (isPlaying) Color(0xFF64B5F6) else Color.White,
                 fontWeight = if (isPlaying) FontWeight.Bold else FontWeight.Normal,
                 maxLines = 1,
@@ -167,27 +142,12 @@ fun PlaylistItem(
             )
         }
 
-        // --- 右侧功能区 ---
         Row(verticalAlignment = Alignment.CenterVertically) {
-
-            // 1. 歌词按钮
             IconButton(onClick = onLyricClick) {
-                Icon(
-                    imageVector = Icons.Default.Description,
-                    contentDescription = "Bind Lyric",
-                    tint = if (audio.lyricUri != null) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.3f),
-                    modifier = Modifier.size(20.dp)
-                )
+                Icon(Icons.Default.Description, "Bind Lyric", tint = if (audio.lyricUri != null) Color(0xFF64B5F6) else Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
             }
-
-            // 2. 删除按钮 (替代了原来的音符图标)
             IconButton(onClick = onRemoveClick) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Remove",
-                    tint = Color.White.copy(alpha = 0.5f), // 稍微淡一点，避免太抢眼
-                    modifier = Modifier.size(20.dp)
-                )
+                Icon(Icons.Default.Delete, "Remove", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
             }
         }
     }

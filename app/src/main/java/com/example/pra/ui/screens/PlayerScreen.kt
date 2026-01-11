@@ -38,50 +38,29 @@ import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 fun PlayerScreen(
     viewModel: MusicPlayerViewModel = viewModel()
 ) {
-    // 1. 收集 UI 状态
     val state by viewModel.uiState.collectAsState()
-
-    // 2. 控制播放列表显示的本地状态
     var showPlaylist by remember { mutableStateOf(false) }
-
-    // 3. 临时记录：当前正在为哪首歌绑定歌词
     var tempAudioIdForLyric by remember { mutableLongStateOf(-1L) }
-
     val context = LocalContext.current
 
-    // --- A. 文件选择器：添加歌曲 ---
-    val addFileLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
+    // 文件选择器
+    val addFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
-            // 关键：申请持久化读权限
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-            context.contentResolver.takePersistableUriPermission(it, flags)
-
+            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             viewModel.addFile(it)
         }
     }
-
-    // --- B. 文件选择器：绑定歌词 ---
-    val bindLyricLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
+    val bindLyricLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
-            // 关键：申请持久化读权限
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-            context.contentResolver.takePersistableUriPermission(it, flags)
-
+            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             if (tempAudioIdForLyric != -1L) {
                 viewModel.bindLyric(tempAudioIdForLyric, it)
-                tempAudioIdForLyric = -1L // 重置
+                tempAudioIdForLyric = -1L
             }
         }
     }
 
-    // --- 4. 背景层 ---
     AtmosphericFluidBackground {
-
-        // 5. 主内容层
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -89,52 +68,31 @@ fun PlayerScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
-            // TopBar
             Box(modifier = Modifier.padding(top = 16.dp)) {
-                TopBarSection(
-                    onMoreClick = { /* TODO */ },
-                    onMinimizeClick = { /* TODO */ }
-                )
+                TopBarSection(onMoreClick = {}, onMinimizeClick = {})
             }
-
             Spacer(modifier = Modifier.weight(2f))
-
-            // AlbumArt
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-            ) {
+            Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
                 AlbumArtSection(coverUri = state.coverUri)
             }
-
             Spacer(modifier = Modifier.height(10.dp))
-
-            // TrackInfo
             Box(modifier = Modifier.fillMaxWidth()) {
-                TrackInfoSection(
-                    state = state,
-                    onFavoriteClick = { /* TODO */ },
-                )
+                TrackInfoSection(state = state, onFavoriteClick = {})
             }
-
             Spacer(modifier = Modifier.weight(0.5f))
 
-            // Controls
             Column(modifier = Modifier.fillMaxWidth()) {
                 ControlsSection(
                     state = state,
                     onPlayPauseClick = { viewModel.togglePlayPause() },
                     onPrevClick = { viewModel.skipToPrevious() },
                     onNextClick = { viewModel.skipToNext() },
-                    onSeek = { progressValue -> viewModel.seekTo(progressValue) }
+                    onSeek = { viewModel.seekTo(it) },
+                    onVolumeChange = { viewModel.setVolume(it) }
                 )
             }
-
             Spacer(modifier = Modifier.weight(0.5f))
 
-            // BottomNav
             Box(modifier = Modifier.padding(bottom = 16.dp)) {
                 BottomNavSection(
                     currentMode = state.playMode,
@@ -145,30 +103,19 @@ fun PlayerScreen(
         }
     }
 
-    // --- 6. 播放列表弹窗 ---
     if (showPlaylist) {
         PlaylistBottomSheet(
             playlist = state.playlist,
             currentSongId = state.currentSongId,
             onDismissRequest = { showPlaylist = false },
-            onItemClick = { audio -> viewModel.playSong(audio.id) },
-
-            // 新增功能回调
-            onScanClick = {
-                viewModel.scanAndAppend()
-            },
-            onAddFileClick = {
-                // 打开系统文件选择器，筛选音频
-                addFileLauncher.launch(arrayOf("audio/*"))
-            },
-            onBindLyricClick = { audio ->
-                tempAudioIdForLyric = audio.id
-                // 打开系统文件选择器，允许所有文件 (有些 lrc 文件 mimeType 不准)
+            onItemClick = { viewModel.playSong(it.id) },
+            onScanClick = { viewModel.scanAndAppend() },
+            onAddFileClick = { addFileLauncher.launch(arrayOf("audio/*")) },
+            onBindLyricClick = {
+                tempAudioIdForLyric = it.id
                 bindLyricLauncher.launch(arrayOf("*/*"))
-            },onRemoveClick = { audio ->
-                viewModel.removeSong(audio)
-            }
-
+            },
+            onRemoveClick = { viewModel.removeSong(it) }
         )
     }
 }

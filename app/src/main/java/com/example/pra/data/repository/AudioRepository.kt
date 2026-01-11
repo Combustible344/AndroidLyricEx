@@ -12,27 +12,35 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
+/**
+ * 简单的偏好数据类
+ */
+data class PlayerPrefs(
+    val currentSongId: Long = -1L,
+    val currentPosition: Long = 0L,
+    val playModeName: String = "Shuffle",
+    val volume: Float = 1.0f
+)
+
 class AudioRepository(private val context: Context) {
 
     private val playlistFile = File(context.filesDir, "playlist.json")
+    private val prefsFile = File(context.filesDir, "player_prefs.json")
 
     /**
-     * 1. 从系统 MediaStore 扫描音频 (原本的逻辑)
+     * 1. 扫描系统 MediaStore
      */
     suspend fun scanLocalAudio(): List<Audio> = withContext(Dispatchers.IO) {
         val audioList = mutableListOf<Audio>()
 
-        // 定义查询列
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.ALBUM_ID,
-            MediaStore.Audio.Media.DATE_ADDED // 加一个添加时间
+            MediaStore.Audio.Media.ALBUM_ID
         )
 
-        // 过滤条件：必须是音乐，且大于10秒
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
         val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
 
@@ -61,7 +69,6 @@ class AudioRepository(private val context: Context) {
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                         id
                     )
-
                     val albumArtUri = ContentUris.withAppendedId(
                         Uri.parse("content://media/external/audio/albumart"),
                         albumId
@@ -76,7 +83,7 @@ class AudioRepository(private val context: Context) {
                             duration = duration,
                             albumId = albumId,
                             albumArtUri = albumArtUri,
-                            lyricUri = null // 扫描出来的歌暂时没有歌词
+                            lyricUri = null
                         )
                     )
                 }
@@ -84,13 +91,11 @@ class AudioRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("AudioRepository", "Error scanning MediaStore", e)
         }
-
-        Log.d("AudioRepository", "扫描完成，发现 ${audioList.size} 首歌曲")
         return@withContext audioList
     }
 
     /**
-     * 2. 保存列表到本地 JSON
+     * 2. 列表持久化
      */
     suspend fun savePlaylist(playlist: List<Audio>) = withContext(Dispatchers.IO) {
         try {
@@ -103,27 +108,19 @@ class AudioRepository(private val context: Context) {
                     put("artist", audio.artist)
                     put("duration", audio.duration)
                     put("albumId", audio.albumId)
-                    // 如果 albumArtUri 为空，存空字符串
                     put("albumArtUri", audio.albumArtUri?.toString() ?: "")
                     put("lyricUri", audio.lyricUri?.toString() ?: "")
                 }
                 jsonArray.put(jsonObj)
             }
             playlistFile.writeText(jsonArray.toString())
-            Log.d("AudioRepository", "列表已保存，共 ${playlist.size} 首")
         } catch (e: Exception) {
-            Log.e("AudioRepository", "Save failed", e)
+            Log.e("AudioRepository", "Save playlist failed", e)
         }
     }
 
-    /**
-     * 3. 从本地 JSON 读取列表
-     */
     suspend fun loadPlaylistFromFile(): List<Audio> = withContext(Dispatchers.IO) {
-        if (!playlistFile.exists()) {
-            Log.d("AudioRepository", "本地文件不存在，返回空列表")
-            return@withContext emptyList<Audio>()
-        }
+        if (!playlistFile.exists()) return@withContext emptyList<Audio>()
 
         val list = mutableListOf<Audio>()
         try {
@@ -131,26 +128,54 @@ class AudioRepository(private val context: Context) {
             val jsonArray = JSONArray(jsonStr)
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
-
-                val uriStr = obj.getString("uri")
-                val artStr = obj.optString("albumArtUri")
-                val lrcStr = obj.optString("lyricUri")
-
                 list.add(Audio(
                     id = obj.getLong("id"),
-                    uri = Uri.parse(uriStr),
+                    uri = Uri.parse(obj.getString("uri")),
                     title = obj.getString("title"),
                     artist = obj.getString("artist"),
                     duration = obj.getLong("duration"),
                     albumId = obj.getLong("albumId"),
-                    albumArtUri = if (artStr.isNotEmpty()) Uri.parse(artStr) else null,
-                    lyricUri = if (lrcStr.isNotEmpty()) Uri.parse(lrcStr) else null
+                    albumArtUri = if (obj.optString("albumArtUri").isNotEmpty()) Uri.parse(obj.getString("albumArtUri")) else null,
+                    lyricUri = if (obj.optString("lyricUri").isNotEmpty()) Uri.parse(obj.getString("lyricUri")) else null
                 ))
             }
-            Log.d("AudioRepository", "从文件加载了 ${list.size} 首歌曲")
         } catch (e: Exception) {
-            Log.e("AudioRepository", "Load failed", e)
+            Log.e("AudioRepository", "Load playlist failed", e)
         }
         return@withContext list
+    }
+
+    /**
+     * 3. 偏好持久化 (进度、模式、音量)
+     */
+    suspend fun savePlayerPrefs(prefs: PlayerPrefs) = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("songId", prefs.currentSongId)
+                put("position", prefs.currentPosition)
+                put("mode", prefs.playModeName)
+                put("volume", prefs.volume.toDouble())
+            }
+            prefsFile.writeText(json.toString())
+        } catch (e: Exception) {
+            Log.e("AudioRepository", "Save prefs failed", e)
+        }
+    }
+
+    suspend fun loadPlayerPrefs(): PlayerPrefs = withContext(Dispatchers.IO) {
+        if (!prefsFile.exists()) return@withContext PlayerPrefs()
+
+        return@withContext try {
+            val jsonStr = prefsFile.readText()
+            val obj = JSONObject(jsonStr)
+            PlayerPrefs(
+                currentSongId = obj.optLong("songId", -1L),
+                currentPosition = obj.optLong("position", 0L),
+                playModeName = obj.optString("mode", "Shuffle"),
+                volume = obj.optDouble("volume", 1.0).toFloat()
+            )
+        } catch (e: Exception) {
+            PlayerPrefs()
+        }
     }
 }

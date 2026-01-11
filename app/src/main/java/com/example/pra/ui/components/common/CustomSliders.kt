@@ -33,31 +33,22 @@ fun MaterialCustomSlider(
     onValueChange: (Float) -> Unit,
     modifier: Modifier = Modifier,
     trackHeight: Dp = 6.dp,
-    // 渐变色：给进度条加一点高级的视觉流动感
-    activeTrackColor: Color = Color.White,
     inactiveTrackColor: Color = Color.White.copy(alpha = 0.3f)
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isDragging by interactionSource.collectIsDraggedAsState()
 
-    // --- 核心修改：使用物理弹簧动画 ---
+    // 物理弹簧动画：自动平滑补间
     val animatedValue by animateFloatAsState(
         targetValue = value,
         animationSpec = spring(
-            // 1. 阻尼比：NoBouncy (1.0f) 表示没有回弹。
-            // 音乐进度条不需要回弹（时间不会倒流），只需要平滑追赶。
             dampingRatio = Spring.DampingRatioNoBouncy,
-
-            // 2. 刚度：决定了追赶的速度。
-            // StiffnessLow (200f) 像水流一样柔和；
-            // StiffnessMedium (1500f) 比较跟手。
-            // 这里我们选一个稍微自定义的数值 400f，既不拖泥带水，又足够顺滑。
             stiffness = 400f
         ),
         label = "SliderSpringAnimation"
     )
 
-    // 拖拽时用原值，播放时用动画值
+    // 拖拽时跟手，播放时动画
     val valueToDisplay = if (isDragging) value else animatedValue
 
     Slider(
@@ -68,7 +59,6 @@ fun MaterialCustomSlider(
         thumb = { Spacer(modifier = Modifier.size(0.dp)) },
         steps = 0,
         track = { sliderState ->
-            // 轨道背景
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -76,18 +66,13 @@ fun MaterialCustomSlider(
                     .clip(RoundedCornerShape(trackHeight))
                     .background(inactiveTrackColor)
             ) {
-                // 轨道前景 (添加一点渐变色增强视觉质感)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(fraction = sliderState.value)
                         .fillMaxHeight()
                         .background(
-                            // 这是一个很淡的从“亮白”到“纯白”的渐变，会让条子看起来更有光泽
                             Brush.horizontalGradient(
-                                colors = listOf(
-                                    Color(0xFFE0E0E0), // 稍暗的白
-                                    Color.White        // 纯亮白
-                                )
+                                colors = listOf(Color(0xFFE0E0E0), Color.White)
                             )
                         )
                 )
