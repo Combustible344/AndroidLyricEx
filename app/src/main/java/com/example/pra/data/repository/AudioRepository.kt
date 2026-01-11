@@ -8,29 +8,32 @@ import android.util.Log
 import com.example.pra.data.model.Audio
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 
 class AudioRepository(private val context: Context) {
 
+    private val playlistFile = File(context.filesDir, "playlist.json")
+
     /**
-     * 扫描本地所有音频文件
+     * 1. 从系统 MediaStore 扫描音频 (原本的逻辑)
      */
-    suspend fun getLocalAudio(): List<Audio> = withContext(Dispatchers.IO) {
+    suspend fun scanLocalAudio(): List<Audio> = withContext(Dispatchers.IO) {
         val audioList = mutableListOf<Audio>()
 
-        // 1. 定义我们要查询的列
+        // 定义查询列
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
             MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.ALBUM_ID
+            MediaStore.Audio.Media.ALBUM_ID,
+            MediaStore.Audio.Media.DATE_ADDED // 加一个添加时间
         )
 
-        // 2. 查询条件：只查音乐，时长大于 10秒 (过滤掉短提示音)
-        val selection =
-            "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
-
-        // 3. 排序：按添加时间倒序 (新歌在前)
+        // 过滤条件：必须是音乐，且大于10秒
+        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
         val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
 
         try {
@@ -41,7 +44,6 @@ class AudioRepository(private val context: Context) {
                 null,
                 sortOrder
             )?.use { cursor ->
-                // 获取各列的索引
                 val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                 val titleColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                 val artistColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
@@ -55,13 +57,11 @@ class AudioRepository(private val context: Context) {
                     val duration = cursor.getLong(durationColumn)
                     val albumId = cursor.getLong(albumIdColumn)
 
-                    // 生成播放 URI
                     val contentUri = ContentUris.withAppendedId(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                         id
                     )
 
-                    // 生成封面图 URI (Android 通用专辑封面地址)
                     val albumArtUri = ContentUris.withAppendedId(
                         Uri.parse("content://media/external/audio/albumart"),
                         albumId
@@ -76,15 +76,81 @@ class AudioRepository(private val context: Context) {
                             duration = duration,
                             albumId = albumId,
                             albumArtUri = albumArtUri,
-                            lyricUri = null,
+                            lyricUri = null // 扫描出来的歌暂时没有歌词
                         )
                     )
                 }
             }
         } catch (e: Exception) {
-            Log.e("AudioRepository", "Error querying audio", e)
+            Log.e("AudioRepository", "Error scanning MediaStore", e)
         }
 
+        Log.d("AudioRepository", "扫描完成，发现 ${audioList.size} 首歌曲")
         return@withContext audioList
+    }
+
+    /**
+     * 2. 保存列表到本地 JSON
+     */
+    suspend fun savePlaylist(playlist: List<Audio>) = withContext(Dispatchers.IO) {
+        try {
+            val jsonArray = JSONArray()
+            playlist.forEach { audio ->
+                val jsonObj = JSONObject().apply {
+                    put("id", audio.id)
+                    put("uri", audio.uri.toString())
+                    put("title", audio.title)
+                    put("artist", audio.artist)
+                    put("duration", audio.duration)
+                    put("albumId", audio.albumId)
+                    // 如果 albumArtUri 为空，存空字符串
+                    put("albumArtUri", audio.albumArtUri?.toString() ?: "")
+                    put("lyricUri", audio.lyricUri?.toString() ?: "")
+                }
+                jsonArray.put(jsonObj)
+            }
+            playlistFile.writeText(jsonArray.toString())
+            Log.d("AudioRepository", "列表已保存，共 ${playlist.size} 首")
+        } catch (e: Exception) {
+            Log.e("AudioRepository", "Save failed", e)
+        }
+    }
+
+    /**
+     * 3. 从本地 JSON 读取列表
+     */
+    suspend fun loadPlaylistFromFile(): List<Audio> = withContext(Dispatchers.IO) {
+        if (!playlistFile.exists()) {
+            Log.d("AudioRepository", "本地文件不存在，返回空列表")
+            return@withContext emptyList<Audio>()
+        }
+
+        val list = mutableListOf<Audio>()
+        try {
+            val jsonStr = playlistFile.readText()
+            val jsonArray = JSONArray(jsonStr)
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+
+                val uriStr = obj.getString("uri")
+                val artStr = obj.optString("albumArtUri")
+                val lrcStr = obj.optString("lyricUri")
+
+                list.add(Audio(
+                    id = obj.getLong("id"),
+                    uri = Uri.parse(uriStr),
+                    title = obj.getString("title"),
+                    artist = obj.getString("artist"),
+                    duration = obj.getLong("duration"),
+                    albumId = obj.getLong("albumId"),
+                    albumArtUri = if (artStr.isNotEmpty()) Uri.parse(artStr) else null,
+                    lyricUri = if (lrcStr.isNotEmpty()) Uri.parse(lrcStr) else null
+                ))
+            }
+            Log.d("AudioRepository", "从文件加载了 ${list.size} 首歌曲")
+        } catch (e: Exception) {
+            Log.e("AudioRepository", "Load failed", e)
+        }
+        return@withContext list
     }
 }
