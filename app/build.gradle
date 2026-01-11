@@ -75,5 +75,5 @@ dependencies {
     // 添加这一行：ViewModel for Compose
     implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0"
 
-
+    implementation("org.luaj:luaj-jse:3.0.1")
 }
