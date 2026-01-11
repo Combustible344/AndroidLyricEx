@@ -30,7 +30,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import com.example.pra.R
 import com.example.pra.ui.state.PlayerUiState
 
 @Composable
@@ -53,7 +55,7 @@ fun ControlsSection(
                 value = sliderPosition,
                 onValueChange = { sliderPosition = it },
                 // --- 修改点：这里控制粗细 ---
-                trackHeight = 14.dp, // 增大到 8dp，如果不满意可以试 10dp 或 12dp
+                trackHeight = 12.dp, // 增大到 8dp，如果不满意可以试 10dp 或 12dp
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -92,10 +94,12 @@ fun ControlsSection(
             // 上一首
             IconButton(onClick = { /* Previous */ }) {
                 Icon(
-                    imageVector = Icons.Default.SkipPrevious,
+
+                    painter = painterResource(id = R.drawable.backward_step_solid),
+
                     contentDescription = "Previous",
                     tint = Color.White,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(25.dp)
                 )
             }
 
@@ -107,10 +111,10 @@ fun ControlsSection(
                 modifier = Modifier.size(72.dp)
             ) {
                 Icon(
-                    imageVector = if (state.isPlaying) Icons.Default.PauseCircleFilled else Icons.Default.PlayCircleFilled,
+                    painter = painterResource(id = R.drawable.play_solid),
                     contentDescription = "Play/Pause",
                     tint = Color.White,
-                    modifier = Modifier.size(72.dp)
+                    modifier = Modifier.size(40.dp)
                 )
             }
 
@@ -119,10 +123,10 @@ fun ControlsSection(
             // 下一首
             IconButton(onClick = { /* Next */ }) {
                 Icon(
-                    imageVector = Icons.Default.SkipNext,
+                    painter = painterResource(id = R.drawable.forward_step_solid),
                     contentDescription = "Next",
                     tint = Color.White,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(25.dp)
                 )
             }
         }
@@ -141,7 +145,7 @@ fun ControlsSection(
         ) {
             // 音量小图标
             Icon(
-                imageVector = Icons.Default.VolumeDown,
+                painter = painterResource(id = R.drawable.volume_off_solid),
                 contentDescription = "Low Volume",
                 tint = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.size(20.dp)
@@ -152,13 +156,13 @@ fun ControlsSection(
                 value = volumePosition, // 修正：绑定到 volumePosition
                 onValueChange = { volumePosition = it },
                 // --- 修改点：音量条粗细 ---
-                trackHeight = 6.dp, // 稍微比进度条细一点，或者设成一样的 8dp
+                trackHeight = 8.dp, // 稍微比进度条细一点，或者设成一样的 8dp
                 modifier = Modifier.weight(1f) // 修正：必须用 weight，否则挤飞右边图标
             )
 
             // 音量大图标
             Icon(
-                imageVector = Icons.Default.VolumeUp,
+                painter = painterResource(id = R.drawable.volume_high_solid),
                 contentDescription = "High Volume",
                 tint = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.size(20.dp)

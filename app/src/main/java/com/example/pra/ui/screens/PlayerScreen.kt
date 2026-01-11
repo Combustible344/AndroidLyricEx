@@ -3,6 +3,7 @@ package com.example.pra.ui.screens
 import com.example.pra.ui.components.player.AlbumArtSection
 import com.example.pra.ui.components.player.TrackInfoSection
 import com.example.pra.ui.components.player.ControlsSection
+import com.example.pra.ui.components.player.BottomNavSection
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Surface
@@ -40,7 +41,7 @@ fun PlayerScreen(
             // --- 区域 A: 顶部栏 (时间、下拉条、更多) ---
             // 高度固定，不需要 weight
             Box(modifier = Modifier.padding(top = 16.dp)) {
-                TopBarSectionPlaceholder()
+                //TopBarSectionPlaceholder()
             }
 
             // [弹簧 1]：将封面图向下推一点，但不要推太远
@@ -80,7 +81,8 @@ fun PlayerScreen(
 
             // --- 区域 E: 底部导航 ---
             Box(modifier = Modifier.padding(bottom = 16.dp)) {
-                BottomNavSectionPlaceholder()
+               // BottomNavSectionPlaceholder()
+                BottomNavSection()
             }
         }
     }

@@ -1,15 +1,22 @@
 package com.example.pra.ui.components.player
 
+import androidx.compose.foundation.background
+import com.example.pra.ui.components.common.FrostedGlassButton
+import com.example.pra.R
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.outlined.Star
@@ -19,17 +26,22 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.pra.ui.state.PlayerUiState
+import androidx.compose.ui.graphics.Brush
 
 @Composable
 fun TrackInfoSection(
     state: PlayerUiState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFavoriteClick: () -> Unit = {},
 ) {
     Row(
         modifier = modifier
@@ -72,26 +84,18 @@ fun TrackInfoSection(
         Row(
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 收藏图标
-            Icon(
-                imageVector = Icons.Outlined.Star,
+
+
+            // 外层容器：负责定位和点击交互
+
+            FrostedGlassButton(
+                painter = painterResource(id = R.drawable.heart_regular),
                 contentDescription = "Favorite",
-                tint = Color.White.copy(alpha = 0.9f),
-                modifier = Modifier
-                    .size(32.dp)
-                    .clickable { /* TODO: Toggle Favorite */ }
-            )
-
-            Spacer(modifier = Modifier.width(20.dp)) // 图标间距
-
-            // 更多图标
-            Icon(
-                imageVector = Icons.Default.MoreHoriz, // 三个点
-                contentDescription = "More Options",
-                tint = Color.White.copy(alpha = 0.9f),
-                modifier = Modifier
-                    .size(32.dp)
-                    .clickable { /* TODO: Show Menu */ }
+                onClick = onFavoriteClick, // 直接传入回调
+                containerSize = 36.dp,     // 对应您原代码的 size(36.dp)
+                iconSize = 20.dp,          // 对应您原代码的 size(20.dp)
+                iconTint = Color.White,    // 对应您原代码的 tint
+                backgroundColor = Color.White.copy(alpha = 0.2f) // 对应您原代码的 background
             )
         }
     }
