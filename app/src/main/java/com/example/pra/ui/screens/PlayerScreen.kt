@@ -4,6 +4,7 @@ import com.example.pra.ui.components.player.AlbumArtSection
 import com.example.pra.ui.components.player.TrackInfoSection
 import com.example.pra.ui.components.player.ControlsSection
 import com.example.pra.ui.components.player.BottomNavSection
+import com.example.pra.ui.components.player.TopBarSection
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Surface
@@ -42,6 +43,7 @@ fun PlayerScreen(
             // 高度固定，不需要 weight
             Box(modifier = Modifier.padding(top = 16.dp)) {
                 //TopBarSectionPlaceholder()
+                TopBarSection()
             }
 
             // [弹簧 1]：将封面图向下推一点，但不要推太远
