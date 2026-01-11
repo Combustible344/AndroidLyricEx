@@ -1,6 +1,6 @@
 package com.example.pra
 
-import com.example.pra.ui.components.AppleMusicBrightFluidBackground
+import com.example.pra.ui.screens.PlayerScreen
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -39,7 +39,9 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PraTheme {
-                AppleMusicBrightFluidBackground()
+                PlayerScreen()
+
+
             }
         }
 
