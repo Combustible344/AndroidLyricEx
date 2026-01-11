@@ -1,138 +1,108 @@
 package com.example.pra.ui.screens
 
-import com.example.pra.ui.components.player.AlbumArtSection
-import com.example.pra.ui.components.player.TrackInfoSection
-import com.example.pra.ui.components.player.ControlsSection
-import com.example.pra.ui.components.player.BottomNavSection
-import com.example.pra.ui.components.player.TopBarSection
-
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.pra.ui.components.AtmosphericFluidBackground
-import com.example.pra.ui.state.PlayerUiState
-
-
-
-// 这里的导入应该是你之前创建的组件位置
-// import com.example.pra.ui.components.common.TopBarSection
-// import com.example.pra.ui.components.player.AlbumArtSection
-// ... 我们先把这些占位符写在同一个文件下面，方便你复制粘贴看效果
+import com.example.pra.ui.components.player.AlbumArtSection
+import com.example.pra.ui.components.player.BottomNavSection
+import com.example.pra.ui.components.player.ControlsSection
+import com.example.pra.ui.components.player.TopBarSection
+import com.example.pra.ui.components.player.TrackInfoSection
+import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 
 @Composable
 fun PlayerScreen(
-    state: PlayerUiState = PlayerUiState()
+    // 注入 ViewModel (自动获取，不需要手动传)
+    viewModel: MusicPlayerViewModel = viewModel()
 ) {
-    // 1. 最底层：动态模糊背景
+    // 1. 收集 UI 状态 (StateFlow -> Compose State)
+    // 只要 ViewModel 里的 _uiState 变了，这里就会自动刷新
+    val state by viewModel.uiState.collectAsState()
+
+    // 2. 最底层背景
     AtmosphericFluidBackground {
 
-        // 2. 内容层：使用 systemBarsPadding 避开刘海屏和底部手势条
+        // 3. 内容层
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .systemBarsPadding() // 关键：确保不被系统状态栏遮挡
-                .padding(horizontal = 24.dp), // 全局左右边距，保持呼吸感
+                .systemBarsPadding() // 避开状态栏和底部横条
+                .padding(horizontal = 24.dp), // 全局边距
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
 
-            // --- 区域 A: 顶部栏 (时间、下拉条、更多) ---
-            // 高度固定，不需要 weight
+            // --- 区域 A: 顶部栏 ---
             Box(modifier = Modifier.padding(top = 16.dp)) {
-                //TopBarSectionPlaceholder()
-                TopBarSection()
+                TopBarSection(
+                    // 暂时没有功能绑定，预留着
+                    onMoreClick = { /* TODO */ },
+                    onMinimizeClick = { /* TODO */ }
+                )
             }
 
-            // [弹簧 1]：将封面图向下推一点，但不要推太远
+            // [弹簧 1]
             Spacer(modifier = Modifier.weight(2f))
 
             // --- 区域 B: 专辑封面 ---
-            // 这是视觉重心，给它分配最大的空间权重，或者让它自适应
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f) // 强制保持正方形
+                    .aspectRatio(1f) // 保持正方形
             ) {
-                AlbumArtSection()
+                // 传入真实封面 URI
+                AlbumArtSection(coverUri = state.coverUri)
             }
 
-            // [弹簧 2]：封面和文字之间的间距
+            // [弹簧 2] (使用 height 保持固定间距，或 weight 保持弹性)
             Spacer(modifier = Modifier.height(10.dp))
 
-            // --- 区域 C: 歌曲信息 (歌名、歌手、收藏) ---
+            // --- 区域 C: 歌曲信息 ---
             Box(modifier = Modifier.fillMaxWidth()) {
-                //TrackInfoSectionPlaceholder(state)
-                TrackInfoSection(state)
+                TrackInfoSection(
+                    state = state, // 传入包含歌名歌手的 State
+                    onFavoriteClick = { /* TODO: 收藏功能 */ },
+                )
             }
 
-            // [弹簧 3]：歌曲信息和控制区之间的弹性空间
-            // 这个 weight 可以大一点，让控制区尽量靠下，符合手指操作习惯
+            // [弹簧 3]
             Spacer(modifier = Modifier.weight(0.5f))
 
-            // --- 区域 D: 核心控制区 (进度条、播放按钮、音量) ---
+            // --- 区域 D: 核心控制区 ---
             Column(modifier = Modifier.fillMaxWidth()) {
-                //ControlsSectionPlaceholder()
-                ControlsSection(state)
+                ControlsSection(
+                    state = state,
+                    // --- 关键绑定：连接 ViewModel ---
+                    onPlayPauseClick = { viewModel.togglePlayPause() },
+                    onPrevClick = { viewModel.skipToPrevious() },
+                    onNextClick = { viewModel.skipToNext() },
+                    onSeek = { /* TODO: 进度拖拽待实现 */ }
+                )
             }
 
-            // [弹簧 4]：控制区和底部导航之间的间距
+            // [弹簧 4]
             Spacer(modifier = Modifier.weight(0.5f))
 
             // --- 区域 E: 底部导航 ---
             Box(modifier = Modifier.padding(bottom = 16.dp)) {
-               // BottomNavSectionPlaceholder()
-                BottomNavSection()
+                BottomNavSection(
+                    onCommentClick = { /* TODO */ },
+                    onPlaylistClick = { /* TODO */ }
+                )
             }
         }
     }
-}
-
-// ==========================================
-// 下面是占位组件 (Placeholders)
-// 稍后我们会把它们移动到单独的文件中并细化
-// ==========================================
-
-@Composable
-fun TopBarSectionPlaceholder() {
-    // 临时用一个半透明方块表示位置
-    Surface(
-        color = Color.White.copy(alpha = 0.1f),
-        modifier = Modifier.fillMaxWidth().height(40.dp)
-    ) { /* TODO: 填充 TopBar */ }
-}
-
-@Composable
-fun AlbumArtSectionPlaceholder() {
-    Surface(
-        color = Color.White.copy(alpha = 0.1f),
-        modifier = Modifier.fillMaxSize()
-    ) { /* TODO: 填充专辑封面 */ }
-}
-
-@Composable
-fun TrackInfoSectionPlaceholder(state: PlayerUiState) {
-    Surface(
-        color = Color.White.copy(alpha = 0.1f),
-        modifier = Modifier.fillMaxWidth().height(60.dp)
-    ) { /* TODO: 填充歌名歌手 */ }
-}
-
-@Composable
-fun ControlsSectionPlaceholder() {
-    // 包含进度条、播放按钮、音量，暂时给个总高度
-    Surface(
-        color = Color.White.copy(alpha = 0.1f),
-        modifier = Modifier.fillMaxWidth().height(180.dp)
-    ) { /* TODO: 填充控制面板 */ }
-}
-
-@Composable
-fun BottomNavSectionPlaceholder() {
-    Surface(
-        color = Color.White.copy(alpha = 0.1f),
-        modifier = Modifier.fillMaxWidth().height(50.dp)
-    ) { /* TODO: 填充底部导航 */ }
 }

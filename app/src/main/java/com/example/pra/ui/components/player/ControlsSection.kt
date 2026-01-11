@@ -38,7 +38,12 @@ import com.example.pra.ui.state.PlayerUiState
 @Composable
 fun ControlsSection(
     state: PlayerUiState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // --- 新增回调 ---
+    onPlayPauseClick: () -> Unit = {},
+    onPrevClick: () -> Unit = {},
+    onNextClick: () -> Unit = {},
+    onSeek: (Float) -> Unit = {} // 进度拖拽
 ) {
     Column(
         modifier = modifier.fillMaxWidth()
@@ -52,8 +57,8 @@ fun ControlsSection(
 
             // 进度条
             MaterialCustomSlider(
-                value = sliderPosition,
-                onValueChange = { sliderPosition = it },
+                value = state.progress,
+                onValueChange = { onSeek(it) },
                 // --- 修改点：这里控制粗细 ---
                 trackHeight = 12.dp, // 增大到 8dp，如果不满意可以试 10dp 或 12dp
                 modifier = Modifier.fillMaxWidth()
@@ -69,12 +74,12 @@ fun ControlsSection(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "1:24",
+                    text = state.currentTime,
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.7f)
                 )
                 Text(
-                    text = "-2:48",
+                    text = state.totalTime,
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.7f)
                 )
@@ -92,7 +97,7 @@ fun ControlsSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 上一首
-            IconButton(onClick = { /* Previous */ }) {
+            IconButton(onClick = onPrevClick) {
                 Icon(
 
                     painter = painterResource(id = R.drawable.backward_step_solid),
@@ -107,7 +112,7 @@ fun ControlsSection(
 
             // 播放/暂停
             IconButton(
-                onClick = { /* Toggle Play */ },
+                onClick = onPlayPauseClick,
                 modifier = Modifier.size(72.dp)
             ) {
                 Icon(
@@ -121,7 +126,7 @@ fun ControlsSection(
             Spacer(modifier = Modifier.width(40.dp))
 
             // 下一首
-            IconButton(onClick = { /* Next */ }) {
+            IconButton(onClick = onNextClick) {
                 Icon(
                     painter = painterResource(id = R.drawable.forward_step_solid),
                     contentDescription = "Next",

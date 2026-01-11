@@ -47,6 +47,7 @@ dependencies {
     implementation libs.androidx.compose.ui.graphics
     implementation libs.androidx.compose.ui.tooling.preview
     implementation libs.androidx.compose.material3
+    implementation libs.volley
     testImplementation libs.junit
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
@@ -55,4 +56,23 @@ dependencies {
     debugImplementation libs.androidx.compose.ui.tooling
     debugImplementation libs.androidx.compose.ui.test.manifest
     implementation(libs.androidx.compose.material.icons.extended)
+
+    // Media3 (ExoPlayer) - 使用 def 定义变量
+    def media3Version = "1.2.0"
+
+    implementation "androidx.media3:media3-exoplayer:$media3Version" // 核心播放器
+    implementation "androidx.media3:media3-session:$media3Version"   // 媒体会话 (Service 通信)
+    implementation "androidx.media3:media3-ui:$media3Version"        // (可选) 包含一些现成的 UI 组件
+
+    // Coroutines
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+
+    // Coil for Compose (用于加载专辑封面)
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
+
+    // 添加这一行：ViewModel for Compose
+    implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0"
+
+
 }

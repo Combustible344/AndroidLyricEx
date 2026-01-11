@@ -15,48 +15,79 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import android.net.Uri
+import androidx.compose.ui.draw.alpha
+import coil.compose.AsyncImage // 引入这个
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil.request.ImageRequest
 
 @Composable
 fun AlbumArtSection(
+    coverUri: Uri?, // <--- 新增参数：接收封面 URI
     modifier: Modifier = Modifier
 ) {
     val placeholderCoverGradient = Brush.linearGradient(
-        colors = listOf(
-            Color(0xFFE0C3FC),
-            Color(0xFF8EC5FC)
-        )
+        colors = listOf(Color(0xFFE0C3FC), Color(0xFF8EC5FC))
     )
 
-    // 外层容器
     Box(
         modifier = modifier.fillMaxWidth(),
-        // 关键点：将默认对齐方式设为“底部居中”
         contentAlignment = Alignment.BottomCenter
     ) {
-        // --- 第一层：弥散光晕 (Shadow) ---
-        // 阴影也对齐底部，但额外向下偏移一点点 (offset y)，让它露出来
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.5f) // 宽度 50%
-                .aspectRatio(1f)
-                .align(Alignment.BottomCenter) // 对齐底部
-                //.offset(y = 15.dp) // 向下“溢出”一点，制造悬浮感
-                .blur(radius = 35.dp)
-                .background(
-                    brush = placeholderCoverGradient,
-                    alpha = 0.6f
-                )
-        )
+        // --- 1. 阴影层 (模糊) ---
+        // 我们尝试加载同一张图做阴影，如果没有图就用渐变
+        if (coverUri != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(coverUri)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth(0.5f)
+                    .aspectRatio(1f)
+                    .align(Alignment.BottomCenter)
+                    .offset(y = 15.dp)
+                    .blur(radius = 35.dp) // 模糊
+                    .alpha(0.6f)          // 半透明
+                    .clip(RoundedCornerShape(20.dp))
+            )
+        } else {
+            // 没有封面时的默认阴影
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.5f)
+                    .aspectRatio(1f)
+                    .align(Alignment.BottomCenter)
+                    .blur(radius = 35.dp)
+                    .background(brush = placeholderCoverGradient, alpha = 0.6f)
+            )
+        }
 
-        // --- 第二层：专辑主图 (Image) ---
+        // --- 2. 主图层 ---
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.7f) // 宽度 60%
+                .fillMaxWidth(0.6f)
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(20.dp))
-                .background(brush = placeholderCoverGradient)
-                .align(Alignment.BottomCenter) // 关键：严格与父级底边对齐
+                .background(brush = placeholderCoverGradient) // 默认底色
+                .align(Alignment.BottomCenter)
         ) {
+            if (coverUri != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(coverUri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "Album Art",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            // 微微的纹理遮罩，增加质感
             Box(
                 modifier = Modifier
                     .fillMaxSize()
