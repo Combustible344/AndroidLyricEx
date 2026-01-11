@@ -13,13 +13,16 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.example.pra.data.model.Audio
+import com.example.pra.data.model.LyricLine
 import com.example.pra.data.repository.AudioRepository
 import com.example.pra.data.repository.PlayerPrefs
 import com.example.pra.service.MusicService
 import com.example.pra.ui.state.PlayMode
 import com.example.pra.ui.state.PlayerUiState
+import com.example.pra.utils.LyricParser
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,11 +59,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         controllerFuture?.addListener({
             try {
                 mediaController = controllerFuture?.get()
-                // 1. 加载数据
                 loadSavedPlaylist()
-                // 2. 监听器
                 setupPlayerListener()
-                // 3. 启动高频进度同步
                 startProgressUpdateLoop()
             } catch (e: Exception) {
                 Log.e("MusicPlayerVM", "Service connection failed", e)
@@ -73,14 +73,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private fun loadSavedPlaylist() {
         viewModelScope.launch {
             var songs = repository.loadPlaylistFromFile()
-            // 第一次安装，尝试自动扫描
             if (songs.isEmpty()) {
                 songs = repository.scanLocalAudio()
                 repository.savePlaylist(songs)
             }
-            // 放入播放器，但不自动播放
             updatePlaylistAndPlayer(songs, autoPlay = false)
-            // 恢复上次的状态 (模式、进度、音量)
             restorePlayerState()
         }
     }
@@ -89,21 +86,18 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             val prefs = repository.loadPlayerPrefs()
             mediaController?.let { player ->
-                // 恢复模式
                 val savedMode = try { PlayMode.valueOf(prefs.playModeName) } catch (e: Exception) { PlayMode.Shuffle }
                 applyPlayModeToPlayer(player, savedMode)
 
-                // 恢复音量
                 player.volume = prefs.volume
 
-                // 恢复歌曲
                 val index = currentPlaylist.indexOfFirst { it.id == prefs.currentSongId }
                 if (index != -1) {
                     player.seekToDefaultPosition(index)
                     if (prefs.currentPosition > 0) player.seekTo(prefs.currentPosition)
+                    loadLyricsForCurrentSong(prefs.currentSongId)
                 }
 
-                // 更新 UI
                 _uiState.update {
                     it.copy(
                         playMode = savedMode,
@@ -129,6 +123,86 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // --- 歌词处理逻辑 ---
+
+    private fun loadLyricsForCurrentSong(audioId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val audio = currentPlaylist.find { it.id == audioId }
+            val lyricUri = audio?.lyricUri
+
+            // 调试日志：检查 URI 是否存在
+            if (lyricUri == null) {
+                Log.w("LyricConsole", "当前歌曲 (ID: $audioId) 未绑定歌词文件")
+                _uiState.update {
+                    it.copy(lyrics = emptyList(), currentLyricIndex = -1, currentLyricLine = null)
+                }
+                return@launch
+            }
+
+            try {
+                Log.d("LyricConsole", "开始解析歌词文件: $lyricUri")
+                val inputStream = context.contentResolver.openInputStream(lyricUri)
+                val lyricEntry = LyricParser.parse(inputStream)
+
+                _uiState.update { it.copy(lyrics = lyricEntry.lines) }
+
+                Log.d("LyricConsole", "歌词解析成功，共 ${lyricEntry.lines.size} 行")
+
+                // 打印前几行看看解析内容对不对
+                lyricEntry.lines.take(3).forEach {
+                    Log.d("LyricConsole", "预览: [${formatTime(it.startTime)}] ${it.text}")
+                }
+
+            } catch (e: Exception) {
+                Log.e("LyricConsole", "加载歌词失败", e)
+                _uiState.update {
+                    it.copy(lyrics = emptyList(), currentLyricIndex = -1, currentLyricLine = null)
+                }
+            }
+        }
+    }
+
+    // --- 核心：实时计算当前歌词 (行 + 字) ---
+    private fun updateCurrentLyricLine(position: Long) {
+        val lyrics = _uiState.value.lyrics
+        if (lyrics.isEmpty()) return
+
+        // 1. 计算当前行
+        val lineIndex = lyrics.indexOfLast { it.startTime <= position }
+        val activeLine = if (lineIndex != -1) lyrics[lineIndex] else null
+
+        // 2. 计算当前字
+        var wordIndex = -1
+        if (activeLine != null && activeLine.words.isNotEmpty()) {
+            wordIndex = activeLine.words.indexOfLast { it.startTime <= position }
+        }
+
+        // 3. 状态更新
+        val currentState = _uiState.value
+        if (currentState.currentLyricIndex != lineIndex || currentState.currentWordIndex != wordIndex) {
+
+            _uiState.update {
+                it.copy(
+                    currentLyricIndex = lineIndex,
+                    currentLyricLine = activeLine,
+                    currentWordIndex = wordIndex
+                )
+            }
+
+            // ★★★ 恢复 Log 输出 ★★★
+            if (activeLine != null) {
+                // 打印当前行内容
+                Log.i("LyricConsole", ">>> [${formatTime(activeLine.startTime)}] ${activeLine.text}")
+
+                // 如果有逐字进度，也打印当前字
+                if (wordIndex != -1 && activeLine.words.isNotEmpty()) {
+                    val word = activeLine.words.getOrNull(wordIndex)?.text
+                    Log.i("LyricConsole", "   Word: $word")
+                }
+            }
+        }
+    }
+
     // --- 文件操作 ---
 
     fun scanAndAppend() {
@@ -143,7 +217,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
             if (addedCount > 0) {
-                updatePlaylistAndPlayer(current, autoPlay = false) // 只是追加，不打断播放
+                updatePlaylistAndPlayer(current, autoPlay = false)
                 repository.savePlaylist(current)
             }
         }
@@ -177,7 +251,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             _uiState.update { it.copy(playlist = current) }
             currentPlaylist = current
             repository.savePlaylist(current)
-            // 可选：如果希望删除后立即同步给播放器，可以调用 updatePlaylistAndPlayer(current, false)
         }
     }
 
@@ -190,6 +263,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 _uiState.update { it.copy(playlist = current) }
                 currentPlaylist = current
                 repository.savePlaylist(current)
+
+                if (audioId == _uiState.value.currentSongId) {
+                    loadLyricsForCurrentSong(audioId)
+                }
             }
         }
     }
@@ -217,7 +294,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun skipToNext() {
         mediaController?.let { player ->
-            // 单曲循环模式强制重播，不切歌
             if (player.repeatMode == Player.REPEAT_MODE_ONE) {
                 player.seekTo(0)
                 player.play()
@@ -247,6 +323,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             val pos = (player.duration * progress).toLong()
             player.seekTo(pos)
             _uiState.update { it.copy(progress = progress, currentTime = formatTime(pos)) }
+            updateCurrentLyricLine(pos)
         }
     }
 
@@ -281,8 +358,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         mediaController?.let { player ->
-            // 如果列表变动，重新设置
-            // 注意：这会重置当前播放，如果不想重置需要 diff，这里简化处理
             val currentMediaId = player.currentMediaItem?.mediaId
             val wasPlaying = player.isPlaying
 
@@ -292,7 +367,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 val index = items.indexOfFirst { it.mediaId == currentMediaId }
                 if (index != -1) {
                     player.seekToDefaultPosition(index)
-                    // 如果列表变动前在播放，且 autoPlay 允许，或者本来就在播，则继续
                     if (wasPlaying && autoPlay) player.play()
                 }
             } else {
@@ -318,7 +392,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         mediaController?.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _uiState.update { it.copy(isPlaying = isPlaying) }
-                if (!isPlaying) saveCurrentState() // 暂停时保存
+                if (!isPlaying) saveCurrentState()
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -334,7 +408,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             totalTime = formatTime(mediaController?.duration ?: 0L)
                         )
                     }
-                    saveCurrentState() // 切歌时保存
+                    saveCurrentState()
+                    loadLyricsForCurrentSong(currentId)
                 }
             }
 
@@ -364,16 +439,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                         val currentPos = player.currentPosition
                         val duration = player.duration.coerceAtLeast(1L)
                         val progress = currentPos.toFloat() / duration.toFloat()
+
                         _uiState.update {
-                            it.copy(progress = progress, currentTime = formatTime(currentPos), totalTime = formatTime(duration))
+                            it.copy(
+                                progress = progress,
+                                currentTime = formatTime(currentPos),
+                                totalTime = formatTime(duration)
+                            )
                         }
+                        // 实时计算歌词
+                        updateCurrentLyricLine(currentPos)
                     }
-                    // 同步音量 (防止物理按键修改后 UI 不同步)
                     if (player.volume != _uiState.value.volume) {
                         _uiState.update { it.copy(volume = player.volume) }
                     }
                 }
-                delay(100L) // 10Hz 刷新率
+                delay(100L)
             }
         }
     }
