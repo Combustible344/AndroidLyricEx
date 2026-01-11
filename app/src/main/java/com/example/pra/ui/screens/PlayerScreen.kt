@@ -77,7 +77,7 @@ fun PlayerScreen(
             }
             Spacer(modifier = Modifier.height(10.dp))
             Box(modifier = Modifier.fillMaxWidth()) {
-                TrackInfoSection(state = state, onFavoriteClick = {})
+                TrackInfoSection(state = state, onFavoriteClick = {viewModel.toggleLike()})
             }
             Spacer(modifier = Modifier.weight(0.5f))
 

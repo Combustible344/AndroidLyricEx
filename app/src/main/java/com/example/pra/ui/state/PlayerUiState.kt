@@ -34,5 +34,8 @@ data class PlayerUiState(
     // 字级状态 (新增)
     // 如果该行支持逐字 (words不为空)，这里指示当前唱到了第几个字 (List index)
     // 如果不支持或还没开始唱，默认为 -1
-    val currentWordIndex: Int = -1
+    val currentWordIndex: Int = -1,
+
+    val isCurrentSongLiked: Boolean = false,
+    val currentSongLikedCount: Int = 0
 )

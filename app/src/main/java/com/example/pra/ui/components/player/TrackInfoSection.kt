@@ -1,41 +1,20 @@
 package com.example.pra.ui.components.player
 
-import androidx.compose.foundation.background
-import com.example.pra.ui.components.common.FrostedGlassButton
-import com.example.pra.R
-
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreHoriz
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.pra.R
+import com.example.pra.ui.components.common.FrostedGlassButton
 import com.example.pra.ui.state.PlayerUiState
-import androidx.compose.ui.graphics.Brush
 
 @Composable
 fun TrackInfoSection(
@@ -46,56 +25,63 @@ fun TrackInfoSection(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            // 增加一点内边距，或者直接依赖父级的 padding
             .padding(vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween, // 两端对齐
-        verticalAlignment = Alignment.CenterVertically // 垂直居中
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         // --- 左侧：文本信息 ---
-        Column(
-            modifier = Modifier.weight(1f) // 占据剩余空间，防止文字过长把右边图标挤出去
-        ) {
-            // 歌名
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                style = MaterialTheme.typography.headlineMedium,
                 text = state.songTitle,
+                style = MaterialTheme.typography.headlineMedium,
                 color = Color.White,
-                fontSize = 28.sp, // 大字号
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
-                maxLines = 1, // 限制一行
-                overflow = TextOverflow.Ellipsis // 超出显示省略号
-            )
-
-            Spacer(modifier = Modifier.height(4.dp)) // 字间距
-
-            // 歌手
-            Text(
-                style = MaterialTheme.typography.bodyLarge,
-                text = state.artistName,
-                color = Color.White.copy(alpha = 0.6f), // 灰色质感
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // 歌手 + (可选)点赞数显示
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = state.artistName,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                // 如果你想显示点赞数，可以在这里加：
+                /*
+                if (state.currentSongLikedCount > 0) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "❤ ${state.currentSongLikedCount}",
+                        color = Color(0xFFE91E63).copy(alpha = 0.8f),
+                        fontSize = 14.sp
+                    )
+                }
+                */
+            }
         }
 
         // --- 右侧：操作图标 ---
-        Row(
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
 
-
-            // 外层容器：负责定位和点击交互
+            // 根据状态决定图标和颜色
+            val iconRes = if (state.isCurrentSongLiked) R.drawable.heart_solid else R.drawable.heart_regular
+            val iconColor = if (state.isCurrentSongLiked) Color.White else Color.White // 选中变红(粉)，未选中白
 
             FrostedGlassButton(
-                painter = painterResource(id = R.drawable.heart_regular),
+                painter = painterResource(id = iconRes),
                 contentDescription = "Favorite",
-                onClick = onFavoriteClick, // 直接传入回调
-                containerSize = 36.dp,     // 对应您原代码的 size(36.dp)
-                iconSize = 20.dp,          // 对应您原代码的 size(20.dp)
-                iconTint = Color.White,    // 对应您原代码的 tint
-                backgroundColor = Color.White.copy(alpha = 0.2f) // 对应您原代码的 background
+                onClick = onFavoriteClick,
+                containerSize = 36.dp,
+                iconSize = 20.dp,
+                iconTint = iconColor, // 动态颜色
+                backgroundColor = Color.White.copy(alpha = 0.2f)
             )
         }
     }

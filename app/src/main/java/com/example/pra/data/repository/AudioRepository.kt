@@ -41,6 +41,7 @@ class AudioRepository(private val context: Context) {
             MediaStore.Audio.Media.ALBUM_ID
         )
 
+        // 过滤条件：必须是音乐且时长大于10秒
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
         val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
 
@@ -65,14 +66,29 @@ class AudioRepository(private val context: Context) {
                     val duration = cursor.getLong(durationColumn)
                     val albumId = cursor.getLong(albumIdColumn)
 
+                    // 歌曲文件的实际 Uri
                     val contentUri = ContentUris.withAppendedId(
                         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                         id
                     )
-                    val albumArtUri = ContentUris.withAppendedId(
-                        Uri.parse("content://media/external/audio/albumart"),
-                        albumId
-                    )
+
+                    // ★★★ 修复核心：根据 Android 版本使用不同的封面 Uri 获取方式 ★★★
+                    val albumArtUri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        // Android 10 (API 29) 及以上：
+                        // 使用 content://media/external/audio/media/{mediaId}/albumart
+                        // 这种方式直接关联媒体ID，比旧版基于 albumId 的查询更稳定，Coil 可以自动处理
+                        ContentUris.withAppendedId(
+                            Uri.parse("content://media/external/audio/media"),
+                            id
+                        ).buildUpon().appendPath("albumart").build()
+                    } else {
+                        // Android 9 及以下：
+                        // 使用传统的 content://media/external/audio/albumart/{albumId}
+                        ContentUris.withAppendedId(
+                            Uri.parse("content://media/external/audio/albumart"),
+                            albumId
+                        )
+                    }
 
                     audioList.add(
                         Audio(
@@ -110,6 +126,9 @@ class AudioRepository(private val context: Context) {
                     put("albumId", audio.albumId)
                     put("albumArtUri", audio.albumArtUri?.toString() ?: "")
                     put("lyricUri", audio.lyricUri?.toString() ?: "")
+
+                    put("likedCount", audio.likedCount)
+                    put("isLiked", audio.isLiked)
                 }
                 jsonArray.put(jsonObj)
             }
@@ -118,7 +137,21 @@ class AudioRepository(private val context: Context) {
             Log.e("AudioRepository", "Save playlist failed", e)
         }
     }
-
+    private fun getAlbumArtUri(albumId: Long, songId: Long): Uri {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            // Android 10+：直接从歌曲 ID 获取封面，这样更准确
+            ContentUris.withAppendedId(
+                Uri.parse("content://media/external/audio/media"),
+                songId
+            ).buildUpon().appendPath("albumart").build()
+        } else {
+            // Android 9 及以下：使用旧版 Album ID 拼接
+            ContentUris.withAppendedId(
+                Uri.parse("content://media/external/audio/albumart"),
+                albumId
+            )
+        }
+    }
     suspend fun loadPlaylistFromFile(): List<Audio> = withContext(Dispatchers.IO) {
         if (!playlistFile.exists()) return@withContext emptyList<Audio>()
 
@@ -128,16 +161,24 @@ class AudioRepository(private val context: Context) {
             val jsonArray = JSONArray(jsonStr)
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
-                list.add(Audio(
-                    id = obj.getLong("id"),
-                    uri = Uri.parse(obj.getString("uri")),
-                    title = obj.getString("title"),
-                    artist = obj.getString("artist"),
-                    duration = obj.getLong("duration"),
-                    albumId = obj.getLong("albumId"),
-                    albumArtUri = if (obj.optString("albumArtUri").isNotEmpty()) Uri.parse(obj.getString("albumArtUri")) else null,
-                    lyricUri = if (obj.optString("lyricUri").isNotEmpty()) Uri.parse(obj.getString("lyricUri")) else null
-                ))
+                list.add(
+                    Audio(
+                        id = obj.getLong("id"),
+                        uri = Uri.parse(obj.getString("uri")),
+                        title = obj.getString("title"),
+                        artist = obj.getString("artist"),
+                        duration = obj.getLong("duration"),
+                        albumId = obj.getLong("albumId"),
+                        albumArtUri = if (obj.optString("albumArtUri")
+                                .isNotEmpty()
+                        ) Uri.parse(obj.getString("albumArtUri")) else null,
+                        lyricUri = if (obj.optString("lyricUri")
+                                .isNotEmpty()
+                        ) Uri.parse(obj.getString("lyricUri")) else null,
+                        likedCount = obj.optInt("likedCount", 0),
+                        isLiked = obj.optBoolean("isLiked", false)
+                    )
+                )
             }
         } catch (e: Exception) {
             Log.e("AudioRepository", "Load playlist failed", e)
