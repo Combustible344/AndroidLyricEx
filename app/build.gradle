@@ -5,6 +5,14 @@ plugins {
 }
 
 android {
+    signingConfigs {
+        release_config {
+            storeFile file('C:\\Users\\27576\\Desktop\\NSpace\\Android\\Pra\\app\\src\\main\\key')
+            storePassword 'wy666666'
+            keyAlias 'key0'
+            keyPassword 'wy666666'
+        }
+    }
     namespace 'com.example.pra'
     compileSdk {
         version = release(36)
@@ -24,6 +32,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release_config
         }
     }
     compileOptions {
