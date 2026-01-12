@@ -108,26 +108,18 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
             // 4. 设置播放器
             mediaController?.let { player ->
-                // 设置列表
                 player.setMediaItems(items)
 
-                // 恢复模式和音量
                 val savedMode = try { PlayMode.valueOf(prefs.playModeName) } catch (e: Exception) { PlayMode.Shuffle }
                 applyPlayModeToPlayer(player, savedMode)
                 player.volume = prefs.volume
 
-                // 恢复进度
                 val index = songs.indexOfFirst { it.id == prefs.currentSongId }
                 if (index != -1) {
-                    // 关键顺序：先 prepare 让播放器就绪，再 seek
                     player.prepare()
                     player.seekTo(index, prefs.currentPosition)
-
-                    // 强制暂停 (防止 prepare 后自动播放)
                     player.pause()
 
-                    // ★★★ 核心修复：立即强制刷新 UI 状态 ★★★
-                    // 不要等播放器回调，直接用存档数据渲染 UI，解决“进度条不显示”的问题
                     val song = songs[index]
                     _uiState.update {
                         it.copy(
@@ -138,18 +130,15 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             coverUri = song.albumArtUri,
                             currentSongId = song.id,
                             isPlaying = false,
-                            // 强制设置进度和时间
                             currentTime = formatTime(prefs.currentPosition),
                             totalTime = formatTime(song.duration),
                             progress = if (song.duration > 0) prefs.currentPosition.toFloat() / song.duration else 0f
                         )
                     }
 
-                    // 加载歌词和点赞
                     loadLyricsForCurrentSong(prefs.currentSongId)
                     updateUiLikeState(prefs.currentSongId)
                 } else {
-                    // 存档的歌找不到了，默认重置
                     player.prepare()
                     player.pause()
                 }
@@ -157,92 +146,237 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // --- 保存逻辑 ---
+    // --- 保存逻辑 (安全版) ---
 
-    @OptIn(DelicateCoroutinesApi::class)
     private fun saveCurrentState(isDying: Boolean = false) {
-        mediaController?.let { player ->
-            val currentId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: -1L
-            // 只有当有有效歌曲时才保存
-            if (currentId != -1L) {
-                val pos = player.currentPosition
-                val mode = _uiState.value.playMode.name
-                val vol = player.volume
-                val prefs = PlayerPrefs(currentId, pos, mode, vol)
+        val player = mediaController ?: return
+        val currentId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: -1L
 
-                if (isDying) {
-                    // APP 关闭时，使用 GlobalScope 确保写入
-                    GlobalScope.launch(Dispatchers.IO) {
+        if (currentId != -1L) {
+            val prefs = PlayerPrefs(
+                currentSongId = currentId,
+                currentPosition = player.currentPosition,
+                playModeName = _uiState.value.playMode.name,
+                volume = player.volume
+            )
+
+            if (isDying) {
+                // APP 死亡时，使用 runBlocking 确保数据写入
+                try {
+                    kotlinx.coroutines.runBlocking(Dispatchers.IO) {
                         repository.savePlayerPrefs(prefs)
-                        Log.d("Restore", "退出保存: $prefs")
+                        Log.d("Restore", "退出保存(Blocking): $prefs")
                     }
-                } else {
-                    viewModelScope.launch {
-                        repository.savePlayerPrefs(prefs)
-                    }
+                } catch (e: Exception) {
+                    Log.e("Restore", "退出保存失败", e)
+                }
+            } else {
+                viewModelScope.launch(Dispatchers.IO) {
+                    repository.savePlayerPrefs(prefs)
                 }
             }
         }
     }
 
-    // --- 移除歌曲逻辑 (修复版) ---
+
+    // --- 移除歌曲逻辑 (安全版) ---
 
     fun removeSong(audio: Audio) {
         viewModelScope.launch {
             val currentList = _uiState.value.playlist.toMutableList()
-            // 1. 找到这首歌在列表中的索引
             val indexToRemove = currentList.indexOfFirst { it.id == audio.id }
 
             if (indexToRemove == -1) return@launch
 
-            val wasPlayingThis = (audio.id == _uiState.value.currentSongId)
-
-            // 2. 先更新 UI 层和数据层 (保持界面响应)
+            // 1. 乐观更新
             currentList.removeAt(indexToRemove)
             currentPlaylist = currentList
             repository.savePlaylist(currentList)
             _uiState.update { it.copy(playlist = currentList) }
 
-            // 3. 更新播放器 (使用差量更新，避免卡顿)
+            // 2. 处理空列表
+            if (currentList.isEmpty()) {
+                mediaController?.pause()
+                mediaController?.clearMediaItems()
+                _uiState.update {
+                    it.copy(
+                        isPlaying = false,
+                        progress = 0f,
+                        currentTime = "0:00",
+                        songTitle = "请选择歌曲",
+                        artistName = "",
+                        coverUri = null,
+                        currentSongId = -1L
+                    )
+                }
+                return@launch
+            }
+
+            // 3. 更新播放器 (利用 Media3 自动跳过特性)
             mediaController?.let { player ->
-                if (wasPlayingThis) {
-                    // 情况A: 删除了正在播放的歌
-                    // 逻辑：切到下一首，然后把刚才那首删掉
-                    if (player.hasNextMediaItem()) {
-                        player.seekToNextMediaItem()
-                        player.removeMediaItem(indexToRemove)
-                    } else if (currentList.isNotEmpty()) {
-                        // 如果没有下一首了（是最后一首），但列表里还有别的歌，就回到第一首
-                        player.seekToDefaultPosition(0)
-                        player.removeMediaItem(indexToRemove)
-                    } else {
-                        // 列表空了
-                        player.pause()
-                        player.clearMediaItems()
-                        // 重置 UI 状态
-                        _uiState.update {
-                            it.copy(
-                                isPlaying = false,
-                                progress = 0f,
-                                currentTime = "0:00",
-                                songTitle = "请选择歌曲",
-                                artistName = "",
-                                coverUri = null,
-                                currentSongId = -1L
-                            )
-                        }
-                    }
-                } else {
-                    // 情况B: 删除了其他的歌 (★★ 修复卡顿的关键 ★★)
-                    // 直接移除指定索引的 Item，播放器内部会自动处理，不会影响当前播放
-                    // 注意：这里的 indexToRemove 必须是删除动作发生前的索引
+                if (indexToRemove < player.mediaItemCount) {
                     player.removeMediaItem(indexToRemove)
                 }
             }
         }
     }
 
-    // 简单的列表更新辅助方法
+
+    // --- 绑定歌词 (修复版：同步更新内存缓存) ---
+    fun bindLyric(audioId: Long, lyricUri: Uri) {
+        viewModelScope.launch {
+            val current = _uiState.value.playlist.toMutableList()
+            val idx = current.indexOfFirst { it.id == audioId }
+
+            if (idx != -1) {
+                // 1. 更新数据对象
+                current[idx] = current[idx].copy(lyricUri = lyricUri)
+
+                // ★★★ 核心修复：必须同步更新 ViewModel 的内部缓存 ★★★
+                // 否则 loadLyricsForCurrentSong 读到的还是旧对象
+                currentPlaylist = current
+
+                // 2. 更新 UI 状态 (触发按钮高亮)
+                _uiState.update { it.copy(playlist = current) }
+
+                // 3. 保存到本地 (持久化)
+                repository.savePlaylist(current)
+
+                // 4. (优化) 不需要调用 updatePlaylistSimple(current)
+                // 因为 ExoPlayer/MediaItem 并不持有歌词信息，重置列表只会增加卡顿风险
+
+                // 5. 若为当前歌曲，立即重新加载并解析
+                if (audioId == _uiState.value.currentSongId) {
+                    Log.d("Lyric", "立即重新加载歌词: $lyricUri")
+                    loadLyricsForCurrentSong(audioId)
+                }
+            }
+        }
+    }
+
+
+    // --- 扫描与添加 (深度刷新版) ---
+
+    fun scanAndAppend() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val scannedSongs = repository.scanLocalAudio()
+            val currentList = _uiState.value.playlist.toMutableList()
+            val currentMap = currentList.mapIndexed { index, audio -> audio.id to index }.toMap()
+
+            var hasChanges = false
+            scannedSongs.forEach { newAudio ->
+                val existingIndex = currentMap[newAudio.id]
+                if (existingIndex != null) {
+                    val existingAudio = currentList[existingIndex]
+                    if (existingAudio.albumArtUri == null && newAudio.albumArtUri != null) {
+                        currentList[existingIndex] = newAudio.copy(
+                            isLiked = existingAudio.isLiked,
+                            likedCount = existingAudio.likedCount,
+                            lyricUri = existingAudio.lyricUri
+                        )
+                        hasChanges = true
+                    }
+                } else {
+                    currentList.add(0, newAudio)
+                    hasChanges = true
+                }
+            }
+
+            if (hasChanges) {
+                currentPlaylist = currentList
+                repository.savePlaylist(currentList)
+
+                withContext(Dispatchers.Main) {
+                    _uiState.update { it.copy(playlist = currentList) }
+
+                    // 深度刷新播放器元数据
+                    mediaController?.let { player ->
+                        val currentMediaId = player.currentMediaItem?.mediaId
+                        val currentPos = player.currentPosition
+                        val isPlaying = player.isPlaying
+
+                        val newItems = currentList.map { audio ->
+                            MediaItem.Builder()
+                                .setUri(audio.uri)
+                                .setMediaId(audio.id.toString())
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle(audio.title)
+                                        .setArtist(audio.artist)
+                                        .setArtworkUri(audio.albumArtUri)
+                                        .build()
+                                )
+                                .build()
+                        }
+                        player.setMediaItems(newItems)
+
+                        if (currentMediaId != null) {
+                            val targetIndex = newItems.indexOfFirst { it.mediaId == currentMediaId }
+                            if (targetIndex != -1) {
+                                player.seekTo(targetIndex, currentPos)
+                                if (isPlaying) player.play()
+
+                                // 强制同步当前播放的封面到 UI
+                                val currentItem = newItems[targetIndex]
+                                _uiState.update {
+                                    it.copy(
+                                        coverUri = currentItem.mediaMetadata.artworkUri,
+                                        songTitle = currentItem.mediaMetadata.title.toString(),
+                                        artistName = currentItem.mediaMetadata.artist.toString()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 添加文件 (防止重复) ---
+
+    fun addFile(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val meta = extractMetadata(uri)
+            val newAudio = Audio(
+                id = System.currentTimeMillis(),
+                uri = uri,
+                title = meta.title,
+                artist = meta.artist,
+                duration = meta.duration,
+                albumId = 0L,
+                albumArtUri = null
+            )
+
+            withContext(Dispatchers.Main) {
+                val current = _uiState.value.playlist.toMutableList()
+                if (current.none { it.uri == uri }) {
+                    current.add(0, newAudio)
+                    currentPlaylist = current
+                    repository.savePlaylist(current)
+                    _uiState.update { it.copy(playlist = current) }
+
+                    mediaController?.let { player ->
+                        val item = MediaItem.Builder()
+                            .setUri(newAudio.uri)
+                            .setMediaId(newAudio.id.toString())
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(newAudio.title)
+                                    .setArtist(newAudio.artist)
+                                    .build()
+                            )
+                            .build()
+                        player.addMediaItem(0, item)
+                        player.seekToDefaultPosition(0)
+                        player.play()
+                    }
+                }
+            }
+        }
+    }
+
+    // --- 简单列表更新 (内部使用) ---
     private fun updatePlaylistSimple(songs: List<Audio>) {
         val items = songs.map { audio ->
             MediaItem.Builder()
@@ -252,7 +386,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 .build()
         }
         mediaController?.let { player ->
-            // 记录当前播放位置，尝试在重置列表后恢复 (如果是静默更新)
             val currentMediaId = player.currentMediaItem?.mediaId
             val currentPos = player.currentPosition
             val isPlaying = player.isPlaying
@@ -260,7 +393,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             player.setMediaItems(items)
 
             if (currentMediaId != null) {
-                // 尝试找回刚才那首歌
                 val index = items.indexOfFirst { it.mediaId == currentMediaId }
                 if (index != -1) {
                     player.seekTo(index, currentPos)
@@ -270,165 +402,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // --- 其他功能保持不变 ---
+    // --- 控制逻辑 ---
 
-    fun toggleLike() {
-        val currentId = _uiState.value.currentSongId
-        if (currentId == -1L) return
-        viewModelScope.launch {
-            val currentList = _uiState.value.playlist.toMutableList()
-            val index = currentList.indexOfFirst { it.id == currentId }
-            if (index != -1) {
-                val old = currentList[index]
-                val newIsLiked = !old.isLiked
-                val newCount = if (newIsLiked) old.likedCount + 1 else max(0, old.likedCount - 1)
-                currentList[index] = old.copy(isLiked = newIsLiked, likedCount = newCount)
-                currentPlaylist = currentList
-                _uiState.update { it.copy(playlist = currentList, isCurrentSongLiked = newIsLiked, currentSongLikedCount = newCount) }
-                repository.savePlaylist(currentList)
-            }
-        }
-    }
-
-    private fun updateUiLikeState(audioId: Long) {
-        val audio = currentPlaylist.find { it.id == audioId }
-        _uiState.update { it.copy(isCurrentSongLiked = audio?.isLiked ?: false, currentSongLikedCount = audio?.likedCount ?: 0) }
-    }
-
-    // 歌词逻辑
-    private fun loadLyricsForCurrentSong(audioId: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val audio = currentPlaylist.find { it.id == audioId }
-            if (audio?.lyricUri == null) {
-                _uiState.update { it.copy(lyrics = emptyList(), currentLyricIndex = -1, currentLyricLine = null, currentWordIndex = -1) }
-                return@launch
-            }
-            try {
-                val entry = LyricParser.parse(context.contentResolver.openInputStream(audio.lyricUri))
-                _uiState.update { it.copy(lyrics = entry.lines) }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(lyrics = emptyList()) }
-            }
-        }
-    }
-
-    private fun updateCurrentLyricLine(position: Long) {
-        val lyrics = _uiState.value.lyrics
-        if (lyrics.isEmpty()) return
-        val lineIndex = lyrics.indexOfLast { it.startTime <= position }
-        val activeLine = if (lineIndex != -1) lyrics[lineIndex] else null
-        var wordIndex = -1
-        if (activeLine != null && activeLine.words.isNotEmpty()) {
-            wordIndex = activeLine.words.indexOfLast { it.startTime <= position }
-        }
-        if (_uiState.value.currentLyricIndex != lineIndex || _uiState.value.currentWordIndex != wordIndex) {
-            _uiState.update { it.copy(currentLyricIndex = lineIndex, currentLyricLine = activeLine, currentWordIndex = wordIndex) }
-        }
-    }
-
-    // 文件操作
-    fun scanAndAppend() {
-        viewModelScope.launch(Dispatchers.IO) {
-            // 1. 重新扫描所有歌曲 (此时带有最新的正确封面URI)
-            val scannedSongs = repository.scanLocalAudio()
-
-            // 2. 获取当前列表的副本
-            val currentList = _uiState.value.playlist.toMutableList()
-
-            // 3. 构建一个 Map 用于快速查找现有歌曲的索引
-            val currentMap = currentList.mapIndexed { index, audio -> audio.id to index }.toMap()
-
-            var hasChanges = false
-
-            scannedSongs.forEach { newAudio ->
-                val existingIndex = currentMap[newAudio.id]
-
-                if (existingIndex != null) {
-                    // --- 情况 A: 歌曲已存在 ---
-                    // 检查是否需要更新 (比如旧的数据没有封面，而新扫描的有)
-                    val existingAudio = currentList[existingIndex]
-                    if (existingAudio.albumArtUri == null && newAudio.albumArtUri != null) {
-                        // 保留旧的点赞状态和歌词，只更新元数据
-                        currentList[existingIndex] = newAudio.copy(
-                            isLiked = existingAudio.isLiked,
-                            likedCount = existingAudio.likedCount,
-                            lyricUri = existingAudio.lyricUri
-                        )
-                        hasChanges = true
-                    }
-                } else {
-                    // --- 情况 B: 纯粹的新歌 ---
-                    // 加到头部
-                    currentList.add(0, newAudio)
-                    hasChanges = true
-                }
-            }
-
-            // 4. 如果有任何变化，应用更新
-            if (hasChanges) {
-                // 更新内部引用
-                currentPlaylist = currentList
-                // 持久化
-                repository.savePlaylist(currentList)
-
-                // 切换到主线程更新 UI
-                withContext(Dispatchers.Main) {
-                    // 更新播放器队列 (静默更新)
-                    updatePlaylistSimple(currentList)
-                    // 强制刷新 UI
-                    _uiState.update { it.copy(playlist = currentList) }
-                }
-            }
-        }
-    }
-
-
-    fun addFile(uri: Uri) {
-        viewModelScope.launch {
-            val meta = extractMetadata(uri)
-            val newAudio = Audio(
-                id = System.currentTimeMillis(), // 简单的临时ID生成
-                uri = uri,
-                title = meta.title,
-                artist = meta.artist,
-                duration = meta.duration,
-                albumId = 0L,
-                albumArtUri = null
-            )
-            val current = _uiState.value.playlist.toMutableList()
-            if (current.none { it.uri == uri }) {
-                current.add(0, newAudio)
-
-                // 1. 更新内部数据
-                currentPlaylist = current
-                // 2. 更新播放器
-                updatePlaylistSimple(current)
-                // 3. 持久化
-                repository.savePlaylist(current)
-
-                // ★★★【修复点】手动触发 UI 状态更新 ★★★
-                _uiState.update { it.copy(playlist = current) }
-
-                // 可选：添加文件后直接播放这首歌
-                playSong(newAudio.id)
-            }
-        }
-    }
-
-    fun bindLyric(audioId: Long, lyricUri: Uri) {
-        viewModelScope.launch {
-            val current = _uiState.value.playlist.toMutableList()
-            val idx = current.indexOfFirst { it.id == audioId }
-            if (idx != -1) {
-                current[idx] = current[idx].copy(lyricUri = lyricUri)
-                updatePlaylistSimple(current)
-                repository.savePlaylist(current)
-                if (audioId == _uiState.value.currentSongId) loadLyricsForCurrentSong(audioId)
-            }
-        }
-    }
-
-    // 控制逻辑
     fun cyclePlayMode() {
         mediaController?.let {
             val newMode = if (_uiState.value.playMode == PlayMode.LoopOne) PlayMode.Shuffle else PlayMode.LoopOne
@@ -472,7 +447,63 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         if (idx != -1) mediaController?.let { it.seekToDefaultPosition(idx); it.play() }
     }
 
-    // 内部方法
+    // --- 点赞与歌词解析 ---
+
+    fun toggleLike() {
+        val currentId = _uiState.value.currentSongId
+        if (currentId == -1L) return
+        viewModelScope.launch {
+            val currentList = _uiState.value.playlist.toMutableList()
+            val index = currentList.indexOfFirst { it.id == currentId }
+            if (index != -1) {
+                val old = currentList[index]
+                val newIsLiked = !old.isLiked
+                val newCount = if (newIsLiked) old.likedCount + 1 else max(0, old.likedCount - 1)
+                currentList[index] = old.copy(isLiked = newIsLiked, likedCount = newCount)
+                currentPlaylist = currentList
+                _uiState.update { it.copy(playlist = currentList, isCurrentSongLiked = newIsLiked, currentSongLikedCount = newCount) }
+                repository.savePlaylist(currentList)
+            }
+        }
+    }
+
+    private fun updateUiLikeState(audioId: Long) {
+        val audio = currentPlaylist.find { it.id == audioId }
+        _uiState.update { it.copy(isCurrentSongLiked = audio?.isLiked ?: false, currentSongLikedCount = audio?.likedCount ?: 0) }
+    }
+
+    private fun loadLyricsForCurrentSong(audioId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val audio = currentPlaylist.find { it.id == audioId }
+            if (audio?.lyricUri == null) {
+                _uiState.update { it.copy(lyrics = emptyList(), currentLyricIndex = -1, currentLyricLine = null, currentWordIndex = -1) }
+                return@launch
+            }
+            try {
+                val entry = LyricParser.parse(context.contentResolver.openInputStream(audio.lyricUri))
+                _uiState.update { it.copy(lyrics = entry.lines) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(lyrics = emptyList()) }
+            }
+        }
+    }
+
+    private fun updateCurrentLyricLine(position: Long) {
+        val lyrics = _uiState.value.lyrics
+        if (lyrics.isEmpty()) return
+        val lineIndex = lyrics.indexOfLast { it.startTime <= position }
+        val activeLine = if (lineIndex != -1) lyrics[lineIndex] else null
+        var wordIndex = -1
+        if (activeLine != null && activeLine.words.isNotEmpty()) {
+            wordIndex = activeLine.words.indexOfLast { it.startTime <= position }
+        }
+        if (_uiState.value.currentLyricIndex != lineIndex || _uiState.value.currentWordIndex != wordIndex) {
+            _uiState.update { it.copy(currentLyricIndex = lineIndex, currentLyricLine = activeLine, currentWordIndex = wordIndex) }
+        }
+    }
+
+    // --- 内部辅助 ---
+
     private fun applyPlayModeToPlayer(player: Player, mode: PlayMode) {
         when (mode) {
             PlayMode.LoopOne -> { player.shuffleModeEnabled = false; player.repeatMode = Player.REPEAT_MODE_ONE }

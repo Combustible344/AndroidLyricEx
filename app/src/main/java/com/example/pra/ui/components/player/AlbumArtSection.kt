@@ -46,13 +46,14 @@ fun AlbumArtSection(
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .fillMaxWidth(0.5f)
+                    .fillMaxWidth(0.6f)
                     .aspectRatio(1f)
                     .align(Alignment.BottomCenter)
-                    .offset(y = 15.dp)
+                    .offset(y = 5.dp)
+                    .clip(RoundedCornerShape(20.dp))
                     .blur(radius = 35.dp) // 模糊
                     .alpha(0.6f)          // 半透明
-                    .clip(RoundedCornerShape(20.dp))
+
             )
         } else {
             // 没有封面时的默认阴影

@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
                         delay(1000)
                     }
                 }
-
+                var isPlaylistOpen by remember { mutableStateOf(false) }
                 // 歌词动画逻辑
                 val alphaAnim = remember { Animatable(0f) }
                 LaunchedEffect(uiState.currentLyricLine) {
@@ -99,6 +99,7 @@ class MainActivity : ComponentActivity() {
                     config = ScreenSaverConfig(backgroundColor = Color.Black),
                     // ★★★ 核心修改：传入信号给屏保组件，让它知道何时重置计时器 ★★★
                     externalInteractionSignal = interactionSignal,
+                    isEnabled = !isPlaylistOpen,
                     renderer = ScreenSaverRenderer { scope, env, animData ->
                         scope.drawIntoCanvas { canvas ->
                             luaEngine.executeDraw(
@@ -117,6 +118,9 @@ class MainActivity : ComponentActivity() {
                         onUserActivity = {
                             // 当用户在 PlayerScreen 或 PlaylistBottomSheet 操作时，更新这个信号
                             interactionSignal = System.currentTimeMillis()
+                        },
+                        onPlaylistVisibilityChange = { isOpen ->
+                            isPlaylistOpen = isOpen
                         }
                     )
                 }

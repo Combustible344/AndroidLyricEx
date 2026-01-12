@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -38,6 +39,7 @@ import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 fun PlayerScreen(
     viewModel: MusicPlayerViewModel = viewModel(),
     onUserActivity: () -> Unit = {},
+    onPlaylistVisibilityChange: (Boolean) -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     var showPlaylist by remember { mutableStateOf(false) }
@@ -59,6 +61,10 @@ fun PlayerScreen(
                 tempAudioIdForLyric = -1L
             }
         }
+    }
+
+    LaunchedEffect(showPlaylist) {
+        onPlaylistVisibilityChange(showPlaylist)
     }
 
     AtmosphericFluidBackground {

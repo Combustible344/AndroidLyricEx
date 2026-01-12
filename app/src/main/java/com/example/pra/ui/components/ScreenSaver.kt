@@ -2,6 +2,10 @@ package com.example.pra.ui.components
 
 import android.content.Context
 import android.graphics.Paint
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -21,45 +25,29 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.delay
 
 // ==========================================
-// 1. 定义环境与接口 (抽象层)
+// 1. 定义环境与接口
 // ==========================================
 
-/**
- * 绘图环境参数
- * 包含绘图所需的上下文信息，方便开发者调用
- */
 data class ScreenSaverEnvironment(
-    val context: Context,    // Android 上下文 (用于加载 Bitmap, Resources, Fonts 等)
-    val size: Size,          // 画布尺寸 (Width, Height)
-    val center: Offset,      // 画布中心点坐标 (x, y)
-    val config: ScreenSaverConfig // 当前的配置信息
+    val context: Context,
+    val size: Size,
+    val center: Offset,
+    val config: ScreenSaverConfig
 )
 
-/**
- * 屏保配置参数
- */
 data class ScreenSaverConfig(
     val timeoutMillis: Long = 5000,
-    val unlockTapCount: Int = 5,
+    val unlockTapCount: Int = 5, // 改为1次点击唤醒通常体验更好，配合动画很舒服，你可以改回5
     val tapResetMillis: Long = 1000,
     val backgroundColor: Color = Color.Black
 )
 
-/**
- * 绘图策略接口
- * @param T 数据类型
- */
 fun interface ScreenSaverRenderer<T> {
-    /**
-     * @param scope Compose 原生绘图作用域 (调用 drawCircle, drawRect 等)
-     * @param env   自定义环境参数 (包含 Context, Size, Center)
-     * @param data  当前数据
-     */
     fun onDraw(scope: DrawScope, env: ScreenSaverEnvironment, data: T)
 }
 
 // ==========================================
-// 2. 核心组件实现 (容器层)
+// 2. 核心组件实现
 // ==========================================
 
 @Composable
@@ -67,32 +55,37 @@ fun <T> IdleScreenSaver(
     data: T,
     renderer: ScreenSaverRenderer<T>,
     config: ScreenSaverConfig = ScreenSaverConfig(),
-
     externalInteractionSignal: Long = 0L,
-    content: @Composable () -> Unit,
+    isEnabled: Boolean = true,
+    content: @Composable () -> Unit
 ) {
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var isOverlayVisible by remember { mutableStateOf(false) }
-
-    // 获取当前 Android Context，后续传给 Environment
     val currentContext = LocalContext.current
+
+    // 1. 监听外部信号
     LaunchedEffect(externalInteractionSignal) {
-        if (externalInteractionSignal > 0) { // 过滤掉初始值
+        if (externalInteractionSignal > 0) {
             lastInteractionTime = System.currentTimeMillis()
-            // 如果你在操作播放列表时想让屏保消失（如果它已经显示了），可以解开下面这行
-            // isOverlayVisible = false
         }
     }
 
-    // 超时检测逻辑
-    LaunchedEffect(lastInteractionTime, isOverlayVisible, config.timeoutMillis) {
+    // 2. 超时检测
+    LaunchedEffect(lastInteractionTime, isOverlayVisible, config.timeoutMillis, isEnabled) {
+        if (!isEnabled) {
+            isOverlayVisible = false
+            return@LaunchedEffect
+        }
+
         if (!isOverlayVisible) {
             val timeSinceLastInteraction = System.currentTimeMillis() - lastInteractionTime
             val remainingTime = config.timeoutMillis - timeSinceLastInteraction
             if (remainingTime > 0) {
                 delay(remainingTime)
             }
-            isOverlayVisible = true
+            if (isEnabled) {
+                isOverlayVisible = true
+            }
         }
     }
 
@@ -110,12 +103,17 @@ fun <T> IdleScreenSaver(
     ) {
         content()
 
-        if (isOverlayVisible) {
+        // ★★★ 核心修改：添加动画 ★★★
+        AnimatedVisibility(
+            visible = isOverlayVisible,
+            enter = fadeIn(animationSpec = tween(1000)), // 1秒淡入
+            exit = fadeOut(animationSpec = tween(500))   // 0.5秒淡出
+        ) {
             ScreenSaverOverlay(
                 data = data,
                 renderer = renderer,
                 config = config,
-                androidContext = currentContext, // 传入 Context
+                androidContext = currentContext,
                 onUnlock = {
                     isOverlayVisible = false
                     lastInteractionTime = System.currentTimeMillis()
@@ -157,28 +155,21 @@ private fun <T> ScreenSaverOverlay(
                 )
             }
     ) {
-        // 构建环境对象
         val env = ScreenSaverEnvironment(
             context = androidContext,
             size = size,
             center = center,
             config = config
         )
-
-        // 调用外部绘制逻辑
         renderer.onDraw(this, env, data)
     }
 }
 
 // ==========================================
-// 3. 预设绘制器 (工具层)
+// 3. 预设绘制器
 // ==========================================
 
 object ScreenSaverRenderers {
-
-    /**
-     * 简单的居中文字绘制器
-     */
     fun createSimpleTextRenderer(
         textSize: Float = 64f,
         textColor: Int = android.graphics.Color.WHITE
@@ -191,11 +182,8 @@ object ScreenSaverRenderers {
                     textAlign = Paint.Align.CENTER
                     isAntiAlias = true
                 }
-
-                // 直接使用 env 中计算好的参数
                 val xPos = env.center.x
                 val yPos = env.center.y - ((paint.descent() + paint.ascent()) / 2)
-
                 canvas.nativeCanvas.drawText(text, xPos, yPos, paint)
             }
         }
