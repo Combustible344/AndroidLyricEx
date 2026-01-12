@@ -2,6 +2,7 @@ package com.example.pra.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -54,11 +55,34 @@ fun PlayerScreen(
         }
     }
     val bindLyricLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let {
-            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            if (tempAudioIdForLyric != -1L) {
-                viewModel.bindLyric(tempAudioIdForLyric, it)
-                tempAudioIdForLyric = -1L
+        uri?.let { selectedUri ->
+            // --- 核心：手动检查文件名后缀 ---
+            var isLrc = false
+            context.contentResolver.query(selectedUri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1) {
+                        val name = cursor.getString(nameIndex)
+                        // 忽略大小写，检查是否以 .lrc 结尾
+                        if (name != null && name.endsWith(".lrc", ignoreCase = true)) {
+                            isLrc = true
+                        }
+                    }
+                }
+            }
+
+            if (isLrc) {
+                // 是 lrc 文件，继续处理
+                context.contentResolver.takePersistableUriPermission(selectedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                if (tempAudioIdForLyric != -1L) {
+                    viewModel.bindLyric(tempAudioIdForLyric, selectedUri)
+                    tempAudioIdForLyric = -1L
+                    // 提示成功
+                    android.widget.Toast.makeText(context, "歌词绑定成功", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                // 不是 lrc 文件，报错
+                android.widget.Toast.makeText(context, "请选择 .lrc 格式的文件", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }

@@ -71,8 +71,7 @@ class MainActivity : ComponentActivity() {
             PraTheme {
                 val uiState by viewModel.uiState.collectAsState()
 
-                // ★★★ 核心修改：定义交互信号状态 ★★★
-                // 这个状态用于连接 PlayerScreen (包括 BottomSheet) 和 IdleScreenSaver
+                // ★★★ 交互信号：连接 PlayerScreen 和 IdleScreenSaver ★★★
                 var interactionSignal by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
                 // 时间更新逻辑
@@ -84,8 +83,10 @@ class MainActivity : ComponentActivity() {
                         delay(1000)
                     }
                 }
+
                 var isPlaylistOpen by remember { mutableStateOf(false) }
-                // 歌词动画逻辑
+
+                // 歌词切换动画信号 (传给 Lua env.anim)
                 val alphaAnim = remember { Animatable(0f) }
                 LaunchedEffect(uiState.currentLyricLine) {
                     alphaAnim.snapTo(0f)
@@ -97,7 +98,6 @@ class MainActivity : ComponentActivity() {
                 IdleScreenSaver(
                     data = animState,
                     config = ScreenSaverConfig(backgroundColor = Color.Black),
-                    // ★★★ 核心修改：传入信号给屏保组件，让它知道何时重置计时器 ★★★
                     externalInteractionSignal = interactionSignal,
                     isEnabled = !isPlaylistOpen,
                     renderer = ScreenSaverRenderer { scope, env, animData ->
@@ -113,10 +113,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) {
-                    // ★★★ 核心修改：监听播放器界面的用户活动 ★★★
                     PlayerScreen(
                         onUserActivity = {
-                            // 当用户在 PlayerScreen 或 PlaylistBottomSheet 操作时，更新这个信号
                             interactionSignal = System.currentTimeMillis()
                         },
                         onPlaylistVisibilityChange = { isOpen ->
@@ -130,125 +128,168 @@ class MainActivity : ComponentActivity() {
 
     /**
      * ★★★ 脚本加载策略 ★★★
-     * 1. 检查 /Android/data/包名/files/lua_scripts/draw.lua 是否存在
-     * 2. 存在 -> 读取外部文件
-     * 3. 不存在 -> 使用内置默认代码，并将其写入文件供用户参考
      */
     private fun loadScriptStrategy() {
-        // 1. 获取外部存储的私有目录 (不需要额外的读写权限)
-        // 路径通常是: /storage/emulated/0/Android/data/com.example.pra/files/lua_scripts
         val scriptDir = File(getExternalFilesDir(null), "lua_scripts")
-        if (!scriptDir.exists()) {
-            scriptDir.mkdirs()
-        }
+        if (!scriptDir.exists()) scriptDir.mkdirs()
 
         val scriptFile = File(scriptDir, "draw.lua")
 
         if (scriptFile.exists()) {
-            // --- 情况 A: 找到了用户自定义脚本 ---
             try {
                 val userScript = scriptFile.readText()
                 luaEngine.loadScript(userScript)
-                Toast.makeText(this, "已加载外部 Lua 脚本", Toast.LENGTH_SHORT).show()
-                Log.d("LuaLoader", "Loaded external script from: ${scriptFile.absolutePath}")
+
+                // ★★★ 新增提示：明确告知加载了外部文件 ★★★
+                Toast.makeText(this, "已加载外部 Lua 配置", Toast.LENGTH_SHORT).show()
+                Log.d("LuaLoader", "Loaded external script: ${scriptFile.absolutePath}")
             } catch (e: Exception) {
-                Toast.makeText(this, "外部脚本读取失败，使用默认", Toast.LENGTH_LONG).show()
+                // 如果外部文件语法有错，提示并降级
+                Toast.makeText(this, "外部脚本错误，使用默认", Toast.LENGTH_LONG).show()
                 luaEngine.loadScript(DEFAULT_LUA_SCRIPT)
             }
         } else {
-            // --- 情况 B: 没找到，使用内置脚本 ---
-            // 将内置脚本写入文件，作为模板供用户修改
+            // 文件不存在，写入默认模板
             try {
                 scriptFile.writeText(DEFAULT_LUA_SCRIPT)
-                Toast.makeText(this, "已生成默认脚本模板", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Log.e("LuaLoader", "Failed to write template", e)
+                Log.e("LuaLoader", "Write template failed", e)
             }
 
             // 加载内置
             luaEngine.loadScript(DEFAULT_LUA_SCRIPT)
-            Log.d("LuaLoader", "Loaded built-in default script")
+
+            // ★★★ 新增提示：明确告知正在使用内置默认 ★★★
+            Toast.makeText(this, "未找到配置，使用内置默认", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // 为了代码整洁，把长字符串放在这里
+    // ★★★ 内置脚本：淡彩 + 伪逐字特效 ★★★
     companion object {
         private val DEFAULT_LUA_SCRIPT = """
-            -- [[ 默认内置的高级绘制脚本 ]] --
-            
-            -- 辅助函数：绘制居中文字
-            function drawCenteredText(text, y, size, color, alpha)
-                canvas:setTextSize(size)
-                canvas:setColor(color)
-                canvas:setAlpha(alpha)
-                canvas:setTextAlign(1) -- Center
-                canvas:drawText(text, 0, y)
-            end
+            -- [[ 梦幻淡彩 + 伪逐字歌词特效 ]] --
 
             function onDraw(state, env)
+                local w = env.width
+                local h = env.height
+                local cx = w / 2
+                local cy = h / 2
+
+                -- 1. 背景：莫兰迪色渐变
+                -- 顶部淡粉 -> 底部淡蓝
+                canvas:setLinearGradient(0, 0, w, h, "#FFDEE9", "#B5FFFC")
+                canvas:drawRoundRect(0, 0, w, h, 0)
+
+                -- 2. 呼吸光晕
                 canvas:save()
-                
-                -- 1. 坐标系归一化 (中心为 0,0)
-                canvas:translate(env.width / 2, env.height / 2)
-                
-                -- 强制横屏逻辑
-                if env.isPortrait then 
-                    canvas:rotate(90) 
-                end
-                
-                -- 计算虚拟宽高
-                local vw = env.width
-                local vh = env.height
-                if env.isPortrait then vw = env.height; vh = env.width end
-                
-                -- 2. 绘制左上角时间
-                canvas:setTextSize(40)
-                canvas:setColor("#666666")
-                canvas:setTextAlign(0) -- Left
-                canvas:drawText(env.time, -vw/2 + 60, -vh/2 + 100)
-
-                -- 3. 绘制歌词
-                if state.lyric ~= "" then
-                    canvas:setShadow(10, 0, 0, "#333333")
-                    local lyricAlpha = math.floor(env.anim * 255)
-                    local yOffset = 20 - (env.anim * 20)
-                    drawCenteredText(state.lyric, yOffset, 80, "#FFFFFF", lyricAlpha)
-                    canvas:setShadow(0, 0, 0, 0)
-                else
-                    drawCenteredText("等待播放...", 0, 60, "#888888", 255)
-                end
-
-                -- 4. 绘制底部信息栏
-                local metaY = vh/2 - 120
-                local metaInfo = state.title .. " - " .. state.artist
-                drawCenteredText(metaInfo, metaY, 36, "#AAAAAA", 200)
-
-                -- 5. 绘制底部进度条
-                local barWidth = vw * 0.6
-                local barHeight = 6
-                local barY = vh/2 - 80
-                local barLeft = -barWidth / 2
-                
-                canvas:setColor("#333333")
-                canvas:drawRoundRect(barLeft, barY, barLeft + barWidth, barY + barHeight, 3)
-                
-                if state.totalTime ~= "0:00" then
-                    local progressWidth = barWidth * state.progress
-                    canvas:setColor("#FFFFFF")
-                    canvas:setShadow(5, 0, 0, "#FFFFFF") 
-                    canvas:drawRoundRect(barLeft, barY, barLeft + progressWidth, barY + barHeight, 3)
-                    canvas:setShadow(0, 0, 0, 0)
-                end
-                
-                local timeStr = state.currentTime .. " / " .. state.totalTime
-                drawCenteredText(timeStr, barY + 40, 24, "#666666", 150)
-                
-                if state.isLiked then
-                    canvas:setColor("#FF4081")
-                    canvas:drawCircle(vw/2 - 60, -vh/2 + 100, 10)
-                end
-
+                local breathe = math.sin(os.clock()) * 0.05 + 0.95 -- 0.9 ~ 1.0
+                canvas:translate(cx, cy)
+                canvas:scale(breathe, breathe)
+                canvas:setColor("#40FFFFFF") -- 25%透明白
+                canvas:drawCircle(0, 0, w * 0.4)
                 canvas:restore()
+
+                -- 3. 歌词绘制区
+                canvas:save()
+                canvas:translate(cx, cy) -- 移动到屏幕中心
+
+                local text = state.lyric
+                if text == "" then text = state.title .. " - " .. state.artist end
+
+                -- A. 拆分字符
+                local chars = toChars(text)
+                local charCount = #chars
+                
+                -- B. 测量与排版
+                local fontSize = 60
+                if env.isPortrait then fontSize = 48 end
+                
+                canvas:setTextSize(fontSize)
+                local charWidths = {}
+                local totalTextWidth = 0
+                for i = 1, charCount do
+                    local cw = canvas:measureText(chars[i])
+                    charWidths[i] = cw
+                    totalTextWidth = totalTextWidth + cw
+                end
+
+                -- C. 核心算法：计算当前唱到第几个字
+                local lineDuration = state.lineEnd - state.lineStart
+                local timeElapsed = state.position - state.lineStart
+                
+                if lineDuration <= 0 then lineDuration = 5000 end
+                if timeElapsed < 0 then timeElapsed = 0 end
+                
+                -- 平均每个字的时长
+                local durationPerChar = lineDuration / charCount
+                if charCount == 0 then durationPerChar = 1 end
+                
+                -- 当前字索引
+                local activeIndex = math.floor(timeElapsed / durationPerChar) + 1
+
+                -- D. 绘制循环
+                local currentX = -totalTextWidth / 2
+                
+                for i = 1, charCount do
+                    local charStr = chars[i]
+                    local cw = charWidths[i]
+                    
+                    canvas:save()
+                    
+                    if i < activeIndex then
+                        -- [已唱]：灰紫色
+                        canvas:setColor("#7D7090") 
+                        canvas:drawText(charStr, currentX, 0)
+                        
+                    elseif i == activeIndex then
+                        -- [当前]：高亮粉 + 心跳动画
+                        canvas:setColor("#FF6B6B")
+                        canvas:setShadow(15, 0, 0, "#FFFFFFFF")
+                        
+                        -- 0.0 -> 1.0
+                        local charProgress = (timeElapsed % durationPerChar) / durationPerChar
+                        -- 正弦波跳动
+                        local jumpY = -20 * math.sin(charProgress * 3.14) 
+                        local scale = 1.0 + (0.3 * math.sin(charProgress * 3.14))
+                        
+                        canvas:translate(currentX + cw/2, jumpY) 
+                        canvas:scale(scale, scale)
+                        canvas:translate(-(currentX + cw/2), 0)
+                        
+                        canvas:drawText(charStr, currentX, 0)
+                        
+                    else
+                        -- [未唱]：半透明白
+                        canvas:setColor("#80FFFFFF") 
+                        canvas:drawText(charStr, currentX, 0)
+                    end
+                    
+                    canvas:restore()
+                    currentX = currentX + cw
+                end
+                
+                canvas:restore()
+
+                -- 4. 底部极简进度条
+                local bottomY = h - 100
+                local barW = w * 0.7
+                
+                -- 轨道
+                canvas:setColor("#40000000")
+                canvas:drawRoundRect((w-barW)/2, bottomY, (w+barW)/2, bottomY+6, 3)
+                
+                -- 进度
+                if state.progress > 0 then
+                    local progW = barW * state.progress
+                    canvas:setLinearGradient((w-barW)/2, bottomY, (w-barW)/2 + progW, bottomY, "#FF9A9E", "#FECFEF")
+                    canvas:drawRoundRect((w-barW)/2, bottomY, (w-barW)/2 + progW, bottomY+6, 3)
+                end
+                
+                -- 左上角时钟
+                canvas:setTextSize(36)
+                canvas:setColor("#66707070")
+                canvas:setTextAlign(0) -- Left
+                canvas:drawText(env.time, 40, 80)
             end
         """.trimIndent()
     }
