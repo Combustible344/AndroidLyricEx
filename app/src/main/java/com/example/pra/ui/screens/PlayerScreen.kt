@@ -48,12 +48,36 @@ fun PlayerScreen(
     val context = LocalContext.current
 
     // 文件选择器
+    // 音频文件选择器
     val addFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let {
-            context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            viewModel.addFile(it)
+        uri?.let { selectedUri ->
+            // --- 核心：检查后缀名 ---
+            var isValidAudio = false
+            context.contentResolver.query(selectedUri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1) {
+                        val name = cursor.getString(nameIndex)
+                        if (name != null) {
+                            // 这里列出你希望支持的格式
+                            val supportedExtensions = listOf(".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg")
+                            if (supportedExtensions.any { name.endsWith(it, ignoreCase = true) }) {
+                                isValidAudio = true
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (isValidAudio) {
+                context.contentResolver.takePersistableUriPermission(selectedUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                viewModel.addFile(selectedUri)
+            } else {
+                android.widget.Toast.makeText(context, "不支持的音频格式", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
+
     val bindLyricLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { selectedUri ->
             // --- 核心：手动检查文件名后缀 ---
