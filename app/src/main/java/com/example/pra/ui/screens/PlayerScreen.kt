@@ -36,7 +36,8 @@ import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 
 @Composable
 fun PlayerScreen(
-    viewModel: MusicPlayerViewModel = viewModel()
+    viewModel: MusicPlayerViewModel = viewModel(),
+    onUserActivity: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsState()
     var showPlaylist by remember { mutableStateOf(false) }
@@ -115,7 +116,8 @@ fun PlayerScreen(
                 tempAudioIdForLyric = it.id
                 bindLyricLauncher.launch(arrayOf("*/*"))
             },
-            onRemoveClick = { viewModel.removeSong(it) }
+            onRemoveClick = { viewModel.removeSong(it) },
+            onUserActivity = onUserActivity
         )
     }
 }

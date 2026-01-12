@@ -17,11 +17,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.pra.MainActivity
 import com.example.pra.data.model.Audio
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -34,7 +36,8 @@ fun PlaylistBottomSheet(
     onScanClick: () -> Unit,
     onAddFileClick: () -> Unit,
     onBindLyricClick: (Audio) -> Unit,
-    onRemoveClick: (Audio) -> Unit
+    onRemoveClick: (Audio) -> Unit,
+    onUserActivity: () ->Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
 
@@ -43,7 +46,16 @@ fun PlaylistBottomSheet(
         sheetState = sheetState,
         containerColor = Color(0xFF1E2329),
         scrimColor = Color.Black.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        modifier = Modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    // Pass.Initial 确保我们在事件被子组件(如 LazyColumn)消费前就能捕获到
+                    awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                    onUserActivity() // 只要有触摸（按下、移动、抬起），就通知上层
+                }
+            }
+        }
     ) {
         Column(
             modifier = Modifier

@@ -17,6 +17,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -70,6 +71,11 @@ class MainActivity : ComponentActivity() {
             PraTheme {
                 val uiState by viewModel.uiState.collectAsState()
 
+                // ★★★ 核心修改：定义交互信号状态 ★★★
+                // 这个状态用于连接 PlayerScreen (包括 BottomSheet) 和 IdleScreenSaver
+                var interactionSignal by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+                // 时间更新逻辑
                 var timeString by remember { mutableStateOf("") }
                 LaunchedEffect(Unit) {
                     val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -79,6 +85,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // 歌词动画逻辑
                 val alphaAnim = remember { Animatable(0f) }
                 LaunchedEffect(uiState.currentLyricLine) {
                     alphaAnim.snapTo(0f)
@@ -90,6 +97,8 @@ class MainActivity : ComponentActivity() {
                 IdleScreenSaver(
                     data = animState,
                     config = ScreenSaverConfig(backgroundColor = Color.Black),
+                    // ★★★ 核心修改：传入信号给屏保组件，让它知道何时重置计时器 ★★★
+                    externalInteractionSignal = interactionSignal,
                     renderer = ScreenSaverRenderer { scope, env, animData ->
                         scope.drawIntoCanvas { canvas ->
                             luaEngine.executeDraw(
@@ -103,7 +112,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) {
-                    PlayerScreen()
+                    // ★★★ 核心修改：监听播放器界面的用户活动 ★★★
+                    PlayerScreen(
+                        onUserActivity = {
+                            // 当用户在 PlayerScreen 或 PlaylistBottomSheet 操作时，更新这个信号
+                            interactionSignal = System.currentTimeMillis()
+                        }
+                    )
                 }
             }
         }

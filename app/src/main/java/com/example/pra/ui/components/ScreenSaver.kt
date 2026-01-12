@@ -67,13 +67,22 @@ fun <T> IdleScreenSaver(
     data: T,
     renderer: ScreenSaverRenderer<T>,
     config: ScreenSaverConfig = ScreenSaverConfig(),
-    content: @Composable () -> Unit
+
+    externalInteractionSignal: Long = 0L,
+    content: @Composable () -> Unit,
 ) {
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var isOverlayVisible by remember { mutableStateOf(false) }
 
     // 获取当前 Android Context，后续传给 Environment
     val currentContext = LocalContext.current
+    LaunchedEffect(externalInteractionSignal) {
+        if (externalInteractionSignal > 0) { // 过滤掉初始值
+            lastInteractionTime = System.currentTimeMillis()
+            // 如果你在操作播放列表时想让屏保消失（如果它已经显示了），可以解开下面这行
+            // isOverlayVisible = false
+        }
+    }
 
     // 超时检测逻辑
     LaunchedEffect(lastInteractionTime, isOverlayVisible, config.timeoutMillis) {
