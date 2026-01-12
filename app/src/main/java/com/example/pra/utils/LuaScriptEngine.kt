@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Typeface
 import android.util.Log
 import com.example.pra.ui.state.PlayerUiState
 import org.luaj.vm2.Globals
@@ -12,6 +13,8 @@ import org.luaj.vm2.LuaValue
 import org.luaj.vm2.lib.OneArgFunction
 import org.luaj.vm2.lib.jse.CoerceJavaToLua
 import org.luaj.vm2.lib.jse.JsePlatform
+import java.io.File
+
 
 class LuaScriptEngine(context: Context) {
     private val globals: Globals = JsePlatform.standardGlobals()
@@ -21,6 +24,8 @@ class LuaScriptEngine(context: Context) {
     // ★★★ 优化点 1: 复用 Table，减少 GC 压力 ★★★
     private val stateTable = LuaTable()
     private val envTable = LuaTable()
+
+    private val fontCache = HashMap<String, Typeface>()
 
     // ★★★ 优化点 2: 错误提示画笔 ★★★
     private val errorPaint = Paint().apply {
@@ -54,9 +59,47 @@ class LuaScriptEngine(context: Context) {
                 return table
             }
         })
+        // ★★★ 2. 新增：加载字体 (loadFont) ★★★
+        tools.set("loadFont", object : OneArgFunction() {
+            override fun call(arg: LuaValue): LuaValue {
+                val path = arg.checkjstring() ?: return LuaValue.NIL
+
+                // 1. 检查缓存
+                if (fontCache.containsKey(path)) {
+                    return CoerceJavaToLua.coerce(fontCache[path])
+                }
+
+                // 2. 尝试加载
+                var typeface: Typeface? = null
+                try {
+                    // 策略 A: 先尝试从 Assets 加载 (例如 "fonts/myfont.ttf")
+                    typeface = Typeface.createFromAsset(context.assets, path)
+                } catch (e: Exception) {
+                    // 策略 B: 如果 Assets 没找到，尝试从文件系统绝对路径加载
+                    try {
+                        val file = File(path)
+                        if (file.exists()) {
+                            typeface = Typeface.createFromFile(file)
+                        }
+                    } catch (e2: Exception) {
+                        Log.e("LuaScriptEngine", "Failed to load font: $path")
+                    }
+                }
+
+                // 3. 存入缓存并返回
+                return if (typeface != null) {
+                    fontCache[path] = typeface
+                    CoerceJavaToLua.coerce(typeface)
+                } else {
+                    Log.w("LuaScriptEngine", "Font not found: $path")
+                    LuaValue.NIL
+                }
+            }
+        })
         globals.set("tools", tools)
         // 快捷方式：直接用 toChars(...)
         globals.set("toChars", tools.get("toChars"))
+        globals.set("loadFont", tools.get("loadFont"))
     }
 
     fun loadScript(scriptContent: String) {
@@ -116,6 +159,15 @@ class LuaScriptEngine(context: Context) {
             envTable.set("anim", LuaValue.valueOf(animValue.toDouble()))
             envTable.set("isPortrait", LuaValue.valueOf(height > width))
 
+            // ★★★ 注入频谱数据 (直接传 Java 对象，不转换) ★★★
+            // Lua 拿到的是一个 userdata，它看不懂里面的内容，但可以传回给 canvas:drawVisualizerBars
+//            val fftData = AudioVisualizerData.rawFft
+//            if (fftData != null) {
+//                stateTable.set("fft", CoerceJavaToLua.coerce(fftData))
+//            } else {
+//                stateTable.set("fft", LuaValue.NIL)
+//            }
+
             // --- 4. 执行 Lua 函数 ---
             luaOnDrawFunction.call(stateTable, envTable)
 
@@ -145,6 +197,8 @@ class LuaScriptEngine(context: Context) {
         if (parts.size != 2) return 0
         return try {
             parts[0].toInt() * 60 + parts[1].toInt()
-        } catch (e: Exception) { 0 }
+        } catch (e: Exception) {
+            0
+        }
     }
 }

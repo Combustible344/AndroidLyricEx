@@ -1,31 +1,35 @@
 package com.example.pra.ui.viewmodel
 
+import android.Manifest
 import android.app.Application
 import android.content.ComponentName
+import android.content.pm.PackageManager
 import android.media.MediaMetadataRetriever
+import android.media.audiofx.Visualizer
 import android.net.Uri
 import android.util.Log
 import android.widget.Toast
+import androidx.annotation.OptIn
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.example.pra.data.model.Audio
-import com.example.pra.data.model.LyricLine
 import com.example.pra.data.repository.AudioRepository
 import com.example.pra.data.repository.PlayerPrefs
 import com.example.pra.service.MusicService
 import com.example.pra.ui.state.PlayMode
 import com.example.pra.ui.state.PlayerUiState
+import com.example.pra.utils.AudioVisualizerData
 import com.example.pra.utils.LyricParser
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
-import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +52,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private var mediaController: MediaController? = null
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var currentPlaylist: List<Audio> = emptyList()
+
+    // 可视化组件
+    //private var visualizer: Visualizer? = null
 
     init {
         connectToService()
@@ -87,10 +94,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             }
             val prefs = repository.loadPlayerPrefs()
 
-            Log.d(
-                "Restore",
-                "读取到存档: SongId=${prefs.currentSongId}, Pos=${prefs.currentPosition}"
-            )
+            Log.d("Restore", "读取到存档: SongId=${prefs.currentSongId}, Pos=${prefs.currentPosition}")
 
             // 2. 更新内存
             currentPlaylist = songs
@@ -170,7 +174,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             )
 
             if (isDying) {
-                // APP 死亡时，使用 runBlocking 确保数据写入
                 try {
                     kotlinx.coroutines.runBlocking(Dispatchers.IO) {
                         repository.savePlayerPrefs(prefs)
@@ -187,8 +190,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-
-    // --- 移除歌曲逻辑 (安全版) ---
+    // --- 移除歌曲逻辑 ---
 
     fun removeSong(audio: Audio) {
         viewModelScope.launch {
@@ -221,7 +223,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 return@launch
             }
 
-            // 3. 更新播放器 (利用 Media3 自动跳过特性)
+            // 3. 更新播放器
             mediaController?.let { player ->
                 if (indexToRemove < player.mediaItemCount) {
                     player.removeMediaItem(indexToRemove)
@@ -230,8 +232,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // --- 绑定歌词 ---
 
-    // --- 绑定歌词 (修复版：同步更新内存缓存) ---
     fun bindLyric(audioId: Long, lyricUri: Uri) {
         viewModelScope.launch {
             val current = _uiState.value.playlist.toMutableList()
@@ -240,21 +242,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             if (idx != -1) {
                 // 1. 更新数据对象
                 current[idx] = current[idx].copy(lyricUri = lyricUri)
+                currentPlaylist = current // 同步内部缓存
 
-                // ★★★ 核心修复：必须同步更新 ViewModel 的内部缓存 ★★★
-                // 否则 loadLyricsForCurrentSong 读到的还是旧对象
-                currentPlaylist = current
-
-                // 2. 更新 UI 状态 (触发按钮高亮)
+                // 2. 更新 UI 和本地存储
                 _uiState.update { it.copy(playlist = current) }
-
-                // 3. 保存到本地 (持久化)
                 repository.savePlaylist(current)
 
-                // 4. (优化) 不需要调用 updatePlaylistSimple(current)
-                // 因为 ExoPlayer/MediaItem 并不持有歌词信息，重置列表只会增加卡顿风险
-
-                // 5. 若为当前歌曲，立即重新加载并解析
+                // 3. 若为当前歌曲，立即重载
                 if (audioId == _uiState.value.currentSongId) {
                     Log.d("Lyric", "立即重新加载歌词: $lyricUri")
                     loadLyricsForCurrentSong(audioId)
@@ -263,34 +257,23 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-
-    // --- 扫描与添加 (深度刷新版) ---
+    // --- 扫描与添加 (防止重复) ---
 
     fun scanAndAppend() {
         viewModelScope.launch(Dispatchers.IO) {
-            val scannedSongs = repository.scanLocalAudio() // 扫描出来的新列表
+            val scannedSongs = repository.scanLocalAudio()
             val currentList = _uiState.value.playlist.toMutableList()
-
-            // 为了提高性能，先建立一个 ID 映射
             val currentIdMap = currentList.map { it.id }.toHashSet()
 
             var hasChanges = false
 
             scannedSongs.forEach { newAudio ->
-                // 1. 如果 ID 完全一样 (扫描 vs 扫描)，跳过
-                if (currentIdMap.contains(newAudio.id)) {
-                    // (可选) 这里可以做元数据更新逻辑，比如更新封面
-                    return@forEach
-                }
+                // 1. 优先检查 ID
+                if (currentIdMap.contains(newAudio.id)) return@forEach
 
-                // 2. ★★★ 关键：如果 ID 不同，检查是否是手动添加过的同首歌 ★★★
-                // (手动添加的 ID 是时间戳，扫描的是 Database ID，所以 ID 肯定不同，必须比对内容)
-                if (currentList.isDuplicate(newAudio)) {
-                    // 认为是重复的，跳过添加
-                    return@forEach
-                }
+                // 2. 其次检查元数据重复 (防止重复添加手动导入的歌)
+                if (currentList.isDuplicate(newAudio)) return@forEach
 
-                // 3. 确实是新歌，添加到开头 (或者你喜欢的任何位置)
                 currentList.add(0, newAudio)
                 hasChanges = true
             }
@@ -302,56 +285,20 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 withContext(Dispatchers.Main) {
                     _uiState.update { it.copy(playlist = currentList) }
 
-                    // 刷新播放器 (逻辑同上)
+                    // 全量刷新播放器
                     mediaController?.let { player ->
-                        val currentMediaId = player.currentMediaItem?.mediaId
-                        val currentPos = player.currentPosition
-                        val isPlaying = player.isPlaying
-
-                        val newItems = currentList.map { audio ->
-                            MediaItem.Builder()
-                                .setUri(audio.uri)
-                                .setMediaId(audio.id.toString())
-                                .setMediaMetadata(
-                                    MediaMetadata.Builder()
-                                        .setTitle(audio.title)
-                                        .setArtist(audio.artist)
-                                        .setArtworkUri(audio.albumArtUri)
-                                        .build()
-                                )
-                                .build()
-                        }
-                        player.setMediaItems(newItems)
-
-                        if (currentMediaId != null) {
-                            val targetIndex = newItems.indexOfFirst { it.mediaId == currentMediaId }
-                            if (targetIndex != -1) {
-                                player.seekTo(targetIndex, currentPos)
-                                if (isPlaying) player.play()
-
-                                // 同步当前封面
-                                val currentItem = newItems[targetIndex]
-                                _uiState.update {
-                                    it.copy(
-                                        coverUri = currentItem.mediaMetadata.artworkUri,
-                                        songTitle = currentItem.mediaMetadata.title.toString(),
-                                        artistName = currentItem.mediaMetadata.artist.toString()
-                                    )
-                                }
-                            }
-                        }
+                        syncPlayerPlaylist(player, currentList)
                     }
                 }
             }
         }
     }
 
-
-    // --- 添加文件 (防止重复) ---
+    // --- 添加文件 (防止重复 & 队尾添加) ---
 
     fun addFile(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
-            val meta = extractMetadata(uri) // 这里现在会提取封面了
+            val meta = extractMetadata(uri)
 
             val newAudio = Audio(
                 id = System.currentTimeMillis(),
@@ -360,7 +307,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 artist = meta.artist,
                 duration = meta.duration,
                 albumId = 0L,
-                albumArtUri = meta.embeddedArtUri // ★★★ 修改这里，传入提取到的 URI ★★★
+                albumArtUri = meta.embeddedArtUri // 使用提取到的封面
             )
 
             withContext(Dispatchers.Main) {
@@ -368,81 +315,70 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
                 // 1. 检查重复
                 if (current.isDuplicate(newAudio)) {
-                    android.widget.Toast.makeText(context, "歌曲已存在", android.widget.Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "歌曲已存在", Toast.LENGTH_SHORT).show()
                     return@withContext
                 }
 
-                // ... (中间代码不变，添加到队尾、更新UI状态) ...
+                // 2. 添加到队尾
                 current.add(newAudio)
+
+                // 3. 更新缓存
                 currentPlaylist = current
                 repository.savePlaylist(current)
                 _uiState.update { it.copy(playlist = current) }
 
-                // 4. 同步给播放器
+                // 4. 同步给播放器 (不打断当前播放)
                 mediaController?.let { player ->
-                    // ... (记录状态) ...
-                    val currentMediaId = player.currentMediaItem?.mediaId
-                    val currentPos = player.currentPosition
-                    val isPlaying = player.isPlaying
-
-                    val newItems = current.map { audio ->
-                        MediaItem.Builder()
-                            .setUri(audio.uri)
-                            .setMediaId(audio.id.toString())
-                            .setMediaMetadata(
-                                MediaMetadata.Builder()
-                                    .setTitle(audio.title)
-                                    .setArtist(audio.artist)
-                                    .setArtworkUri(audio.albumArtUri) // ★★★ 这里的 audio.albumArtUri 已经有值了 ★★★
-                                    .build()
-                            )
-                            .build()
-                    }
-
-                    player.setMediaItems(newItems)
-
-                    // ... (恢复状态) ...
-                    if (currentMediaId != null) {
-                        val targetIndex = newItems.indexOfFirst { it.mediaId == currentMediaId }
-                        if (targetIndex != -1) {
-                            player.seekTo(targetIndex, currentPos)
-                            if (isPlaying) player.play()
-                        }
-                    } else {
-                        player.prepare()
-                    }
-                    android.widget.Toast.makeText(context, "已添加到列表末尾", android.widget.Toast.LENGTH_SHORT).show()
+                    syncPlayerPlaylist(player, current)
+                    Toast.makeText(context, "已添加到列表末尾", Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
 
+    // --- 播放器同步辅助 ---
+    // 封装了全量替换并恢复播放状态的逻辑
+    private fun syncPlayerPlaylist(player: Player, newSongs: List<Audio>) {
+        val currentMediaId = player.currentMediaItem?.mediaId
+        val currentPos = player.currentPosition
+        val isPlaying = player.isPlaying
 
-
-    // --- 简单列表更新 (内部使用) ---
-    private fun updatePlaylistSimple(songs: List<Audio>) {
-        val items = songs.map { audio ->
+        val newItems = newSongs.map { audio ->
             MediaItem.Builder()
                 .setUri(audio.uri)
                 .setMediaId(audio.id.toString())
                 .setMediaMetadata(
-                    MediaMetadata.Builder().setTitle(audio.title).setArtist(audio.artist).build()
+                    MediaMetadata.Builder()
+                        .setTitle(audio.title)
+                        .setArtist(audio.artist)
+                        .setArtworkUri(audio.albumArtUri)
+                        .build()
                 )
                 .build()
         }
-        mediaController?.let { player ->
-            val currentMediaId = player.currentMediaItem?.mediaId
-            val currentPos = player.currentPosition
-            val isPlaying = player.isPlaying
 
-            player.setMediaItems(items)
+        player.setMediaItems(newItems)
 
-            if (currentMediaId != null) {
-                val index = items.indexOfFirst { it.mediaId == currentMediaId }
-                if (index != -1) {
-                    player.seekTo(index, currentPos)
-                    if (isPlaying) player.play()
+        if (currentMediaId != null) {
+            val targetIndex = newItems.indexOfFirst { it.mediaId == currentMediaId }
+            if (targetIndex != -1) {
+                player.seekTo(targetIndex, currentPos)
+                if (isPlaying) player.play()
+
+                // 顺便更新一下 UI 的封面，以防元数据变了
+                val currentItem = newItems[targetIndex]
+                _uiState.update {
+                    it.copy(
+                        coverUri = currentItem.mediaMetadata.artworkUri,
+                        songTitle = currentItem.mediaMetadata.title.toString(),
+                        artistName = currentItem.mediaMetadata.artist.toString()
+                    )
                 }
+            }
+        } else {
+            // 如果之前列表为空，准备播放第一首
+            if (newItems.isNotEmpty()) {
+                player.prepare()
             }
         }
     }
@@ -451,8 +387,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun cyclePlayMode() {
         mediaController?.let {
-            val newMode =
-                if (_uiState.value.playMode == PlayMode.LoopOne) PlayMode.Shuffle else PlayMode.LoopOne
+            val newMode = if (_uiState.value.playMode == PlayMode.LoopOne) PlayMode.Shuffle else PlayMode.LoopOne
             applyPlayModeToPlayer(it, newMode)
             _uiState.update { s -> s.copy(playMode = newMode) }
             saveCurrentState()
@@ -550,8 +485,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 return@launch
             }
             try {
-                val entry =
-                    LyricParser.parse(context.contentResolver.openInputStream(audio.lyricUri))
+                val entry = LyricParser.parse(context.contentResolver.openInputStream(audio.lyricUri))
                 _uiState.update { it.copy(lyrics = entry.lines) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(lyrics = emptyList()) }
@@ -579,26 +513,72 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // --- 内部辅助 ---
+//    // --- Visualizer 频谱逻辑 (核心修改) ---
+//
+//    // 激活频谱
+//    private fun activateVisualizer(sessionId: Int) {
+//        // 1. 检查权限
+//        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+//            Log.w("Visualizer", "没有录音权限，无法启动频谱")
+//            return
+//        }
+//
+//        try {
+//            // 2. 释放旧的
+//            releaseVisualizer()
+//
+//            // 3. 创建新的
+//            visualizer = Visualizer(sessionId).apply {
+//                // 设置捕获大小 (取范围的上限)
+//                val range = Visualizer.getCaptureSizeRange()
+//                val size = range[1].coerceAtMost(1024) // 限制最大 1024 足够了
+//                captureSize = size
+//
+//                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
+//                    override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
+//                        // 不需要波形
+//                    }
+//
+//                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
+//                        // ★★★ 写入旁路缓存，不走 State ★★★
+//                        AudioVisualizerData.rawFft = fft
+//                    }
+//                }, Visualizer.getMaxCaptureRate() / 2, false, true) // 仅开启 FFT
+//
+//                enabled = true
+//            }
+//            Log.d("Visualizer", "启动成功 SessionID: $sessionId")
+//        } catch (e: Exception) {
+//            Log.e("Visualizer", "初始化失败", e)
+//        }
+//    }
+//
+//    private fun releaseVisualizer() {
+//        visualizer?.enabled = false
+//        visualizer?.release()
+//        visualizer = null
+//        AudioVisualizerData.rawFft = null
+//    }
 
-    private fun applyPlayModeToPlayer(player: Player, mode: PlayMode) {
-        when (mode) {
-            PlayMode.LoopOne -> {
-                player.shuffleModeEnabled = false; player.repeatMode = Player.REPEAT_MODE_ONE
-            }
+    // --- Player 监听器 ---
 
-            PlayMode.Shuffle -> {
-                player.shuffleModeEnabled = true; player.repeatMode = Player.REPEAT_MODE_ALL
-            }
-        }
-    }
-
+    @OptIn(UnstableApi::class)
     private fun setupPlayerListener() {
         mediaController?.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _uiState.update { it.copy(isPlaying = isPlaying) }
                 if (!isPlaying) saveCurrentState()
+
+                // 暂停时关闭频谱省电
+                //visualizer?.enabled = isPlaying
             }
+
+            // ★★★ 监听 AudioSessionId 以启动 Visualizer ★★★
+//            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+//                if (audioSessionId != androidx.media3.common.C.AUDIO_SESSION_ID_UNSET) {
+//                    activateVisualizer(audioSessionId)
+//                }
+//            }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 mediaItem?.let { item ->
@@ -621,21 +601,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
             override fun onPlaybackStateChanged(s: Int) {
                 if (s == Player.STATE_READY) _uiState.update {
-                    it.copy(
-                        totalTime = formatTime(
-                            mediaController?.duration ?: 0L
-                        )
-                    )
+                    it.copy(totalTime = formatTime(mediaController?.duration ?: 0L))
                 }
             }
 
-            override fun onRepeatModeChanged(r: Int) {
-                syncMode()
-            }
-
-            override fun onShuffleModeEnabledChanged(s: Boolean) {
-                syncMode()
-            }
+            override fun onRepeatModeChanged(r: Int) { syncMode() }
+            override fun onShuffleModeEnabledChanged(s: Boolean) { syncMode() }
         })
     }
 
@@ -670,6 +641,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // --- 元数据提取 (包含封面) ---
+
     private fun extractMetadata(uri: Uri): ExtractedMeta {
         val r = MediaMetadataRetriever()
         return try {
@@ -679,20 +652,15 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             val artist = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "未知艺术家"
             val duration = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
 
-            // --- 新增：提取嵌入封面 ---
+            // 提取封面
             var artUri: Uri? = null
-            val embeddedPicture = r.embeddedPicture // 获取图片字节数组
-
+            val embeddedPicture = r.embeddedPicture
             if (embeddedPicture != null) {
                 try {
-                    // 在缓存目录创建一个文件，文件名用时间戳防止冲突
                     val cacheDir = File(context.cacheDir, "custom_covers")
                     if (!cacheDir.exists()) cacheDir.mkdirs()
-
                     val coverFile = File(cacheDir, "cover_${System.currentTimeMillis()}.jpg")
                     coverFile.writeBytes(embeddedPicture)
-
-                    // 获取文件 URI
                     artUri = android.net.Uri.fromFile(coverFile)
                 } catch (e: Exception) {
                     Log.e("Metadata", "Save cover failed", e)
@@ -701,7 +669,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
             ExtractedMeta(title, artist, duration, artUri)
         } catch (e: Exception) {
-            // 如果解析失败，尝试用文件名做标题
             val fileName = getFileNameFromUri(uri) ?: "本地音频"
             ExtractedMeta(fileName, "未知", 0L, null)
         } finally {
@@ -709,7 +676,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // 辅助：从 URI 获取文件名 (作为兜底标题)
     private fun getFileNameFromUri(uri: Uri): String? {
         var result: String? = null
         if (uri.scheme == "content") {
@@ -725,18 +691,28 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             val cut = result?.lastIndexOf('/')
             if (cut != null && cut != -1) result = result?.substring(cut + 1)
         }
-        // 去掉后缀
         return result?.substringBeforeLast(".")
     }
-
 
     private fun formatTime(ms: Long): String {
         val s = ms / 1000
         return String.format(Locale.getDefault(), "%d:%02d", s / 60, s % 60)
     }
 
+    private fun applyPlayModeToPlayer(player: Player, mode: PlayMode) {
+        when (mode) {
+            PlayMode.LoopOne -> {
+                player.shuffleModeEnabled = false; player.repeatMode = Player.REPEAT_MODE_ONE
+            }
+            PlayMode.Shuffle -> {
+                player.shuffleModeEnabled = true; player.repeatMode = Player.REPEAT_MODE_ALL
+            }
+        }
+    }
+
     override fun onCleared() {
         saveCurrentState(isDying = true)
+        //releaseVisualizer() // 确保释放
         super.onCleared()
         controllerFuture?.let { MediaController.releaseFuture(it) }
     }
@@ -747,19 +723,15 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         val duration: Long,
         val embeddedArtUri: Uri? = null
     )
-    // 判断歌曲是否“实质上”已存在（URI相同 或者 元数据完全一致）
+
+    // 判重逻辑
     private fun List<Audio>.isDuplicate(newSong: Audio): Boolean {
         return this.any { existing ->
-            // 1. 绝对相同：URI 一致
             if (existing.uri == newSong.uri) return@any true
-
-            // 2. 实质相同：标题、歌手、时长都一致 (容错 1秒)
             val isSameTitle = existing.title == newSong.title
             val isSameArtist = existing.artist == newSong.artist
             val isSameDuration = kotlin.math.abs(existing.duration - newSong.duration) < 1000
-
             isSameTitle && isSameArtist && isSameDuration
         }
     }
-
 }

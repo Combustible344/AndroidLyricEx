@@ -51,16 +51,24 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MusicPlayerViewModel by viewModels()
     private lateinit var luaEngine: LuaScriptEngine
 
+    // ★★★ 修复 1: 使用 RequestMultiplePermissions 一次请求多个权限 ★★★
     private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /*...*/ }
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.entries.all { it.value }
+        if (granted) {
+            Toast.makeText(this, "权限已获取", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "部分权限未获取，可能影响频谱或读写", Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         luaEngine = LuaScriptEngine(this)
 
-        // ★★★ 核心修改：加载脚本策略 ★★★
+        // ★★★ 加载策略：会注入路径变量 ★★★
         loadScriptStrategy()
 
         enableEdgeToEdge()
@@ -70,8 +78,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             PraTheme {
                 val uiState by viewModel.uiState.collectAsState()
-
-                // ★★★ 交互信号：连接 PlayerScreen 和 IdleScreenSaver ★★★
                 var interactionSignal by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
                 // 时间更新逻辑
@@ -86,7 +92,7 @@ class MainActivity : ComponentActivity() {
 
                 var isPlaylistOpen by remember { mutableStateOf(false) }
 
-                // 歌词切换动画信号 (传给 Lua env.anim)
+                // 歌词切换动画信号
                 val alphaAnim = remember { Animatable(0f) }
                 LaunchedEffect(uiState.currentLyricLine) {
                     alphaAnim.snapTo(0f)
@@ -114,12 +120,8 @@ class MainActivity : ComponentActivity() {
                     }
                 ) {
                     PlayerScreen(
-                        onUserActivity = {
-                            interactionSignal = System.currentTimeMillis()
-                        },
-                        onPlaylistVisibilityChange = { isOpen ->
-                            isPlaylistOpen = isOpen
-                        }
+                        onUserActivity = { interactionSignal = System.currentTimeMillis() },
+                        onPlaylistVisibilityChange = { isOpen -> isPlaylistOpen = isOpen }
                     )
                 }
             }
@@ -127,47 +129,86 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * ★★★ 脚本加载策略 ★★★
+     * ★★★ 核心修改：脚本加载策略 ★★★
      */
     private fun loadScriptStrategy() {
+        // 1. 确定脚本目录: /Android/data/com.example.pra/files/lua_scripts/
         val scriptDir = File(getExternalFilesDir(null), "lua_scripts")
         if (!scriptDir.exists()) scriptDir.mkdirs()
 
         val scriptFile = File(scriptDir, "draw.lua")
 
+        // 2. 准备注入代码：将路径作为全局变量 script_dir 注入到 Lua 环境中
+        // 这样 Lua 脚本就可以用 script_dir .. "/font.ttf" 来引用文件了
+        val pathInjection = "script_dir = \"${scriptDir.absolutePath.replace("\\", "\\\\")}\"\n"
+
         if (scriptFile.exists()) {
             try {
                 val userScript = scriptFile.readText()
-                luaEngine.loadScript(userScript)
+                // 拼接：路径变量定义 + 用户代码
+                luaEngine.loadScript(pathInjection + userScript)
 
-                // ★★★ 新增提示：明确告知加载了外部文件 ★★★
-                Toast.makeText(this, "已加载外部 Lua 配置", Toast.LENGTH_SHORT).show()
-                Log.d("LuaLoader", "Loaded external script: ${scriptFile.absolutePath}")
+                Toast.makeText(this, "已加载外部配置", Toast.LENGTH_SHORT).show()
+                Log.d("LuaLoader", "Loaded script from: ${scriptFile.absolutePath}")
             } catch (e: Exception) {
-                // 如果外部文件语法有错，提示并降级
-                Toast.makeText(this, "外部脚本错误，使用默认", Toast.LENGTH_LONG).show()
-                luaEngine.loadScript(DEFAULT_LUA_SCRIPT)
+                Toast.makeText(this, "外部脚本错误，降级默认", Toast.LENGTH_LONG).show()
+                luaEngine.loadScript(pathInjection + DEFAULT_LUA_SCRIPT)
             }
         } else {
-            // 文件不存在，写入默认模板
+            // 写入默认模板
             try {
                 scriptFile.writeText(DEFAULT_LUA_SCRIPT)
             } catch (e: Exception) {
                 Log.e("LuaLoader", "Write template failed", e)
             }
-
-            // 加载内置
-            luaEngine.loadScript(DEFAULT_LUA_SCRIPT)
-
-            // ★★★ 新增提示：明确告知正在使用内置默认 ★★★
-            Toast.makeText(this, "未找到配置，使用内置默认", Toast.LENGTH_SHORT).show()
+            // 加载内置 (同样注入路径)
+            luaEngine.loadScript(pathInjection + DEFAULT_LUA_SCRIPT)
+            Toast.makeText(this, "使用内置默认配置", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // ★★★ 内置脚本：淡彩 + 伪逐字特效 ★★★
+    private fun checkAndRequestPermissions() {
+        val permissions = mutableListOf<String>()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        permissions.add(Manifest.permission.RECORD_AUDIO)
+
+        val permissionsToRequest = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+
+        if (permissionsToRequest.isNotEmpty()) {
+            // 使用 registerForActivityResult 的 launch 传入数组
+            requestPermissionLauncher.launch(permissionsToRequest)
+        }
+    }
+
+    private fun hideSystemBars() {
+        val wic = WindowCompat.getInsetsController(window, window.decorView)
+        wic.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        wic.hide(WindowInsetsCompat.Type.systemBars())
+    }
+
     companion object {
         private val DEFAULT_LUA_SCRIPT = """
-            -- [[ 梦幻淡彩 + 伪逐字歌词特效 ]] --
+            -- [[ 自定义字体 OLED 歌词 ]] --
+            
+            -- ★★★ 1. 加载字体逻辑 ★★★
+            -- script_dir 变量由 Kotlin 在加载时自动注入
+            local fontName = "SourceHanSansCN-Normal.ttf"
+            local fontPath = script_dir .. "/" .. fontName
+            
+            local customFont = tools.loadFont(fontPath)
+            
+            -- 定义显示的字体名称
+            local fontDisplayName = "Default Font"
+            if customFont then
+                fontDisplayName = "SourceHanSansCN-Normal"
+            end
 
             function onDraw(state, env)
                 local w = env.width
@@ -175,36 +216,33 @@ class MainActivity : ComponentActivity() {
                 local cx = w / 2
                 local cy = h / 2
 
-                -- 1. 背景：莫兰迪色渐变
-                -- 顶部淡粉 -> 底部淡蓝
-                canvas:setLinearGradient(0, 0, w, h, "#FFDEE9", "#B5FFFC")
+                -- 设置背景黑
+                canvas:setColor("#000000")
                 canvas:drawRoundRect(0, 0, w, h, 0)
+                
+                -- ★★★ 2. 应用字体 ★★★
+                if customFont then
+                    canvas:setTypeface(customFont)
+                else
+                    -- 显式重置为默认，防止状态污染
+                    canvas:setTypeface(nil)
+                end
 
-                -- 2. 呼吸光晕
+                -- 歌词区域
                 canvas:save()
-                local breathe = math.sin(os.clock()) * 0.05 + 0.95 -- 0.9 ~ 1.0
-                canvas:translate(cx, cy)
-                canvas:scale(breathe, breathe)
-                canvas:setColor("#40FFFFFF") -- 25%透明白
-                canvas:drawCircle(0, 0, w * 0.4)
-                canvas:restore()
-
-                -- 3. 歌词绘制区
-                canvas:save()
-                canvas:translate(cx, cy) -- 移动到屏幕中心
+                canvas:translate(cx, cy) 
 
                 local text = state.lyric
                 if text == "" then text = state.title .. " - " .. state.artist end
 
-                -- A. 拆分字符
                 local chars = toChars(text)
                 local charCount = #chars
                 
-                -- B. 测量与排版
-                local fontSize = 60
-                if env.isPortrait then fontSize = 48 end
-                
+                local fontSize = 56
+                if env.isPortrait then fontSize = 42 end
                 canvas:setTextSize(fontSize)
+                
+                -- 测量文字
                 local charWidths = {}
                 local totalTextWidth = 0
                 for i = 1, charCount do
@@ -213,101 +251,67 @@ class MainActivity : ComponentActivity() {
                     totalTextWidth = totalTextWidth + cw
                 end
 
-                -- C. 核心算法：计算当前唱到第几个字
+                -- 计算进度
                 local lineDuration = state.lineEnd - state.lineStart
                 local timeElapsed = state.position - state.lineStart
-                
                 if lineDuration <= 0 then lineDuration = 5000 end
                 if timeElapsed < 0 then timeElapsed = 0 end
                 
-                -- 平均每个字的时长
                 local durationPerChar = lineDuration / charCount
                 if charCount == 0 then durationPerChar = 1 end
                 
-                -- 当前字索引
                 local activeIndex = math.floor(timeElapsed / durationPerChar) + 1
 
-                -- D. 绘制循环
+                -- 绘制文字
                 local currentX = -totalTextWidth / 2
                 
                 for i = 1, charCount do
                     local charStr = chars[i]
                     local cw = charWidths[i]
-                    
-                    canvas:save()
+                    local x = currentX
                     
                     if i < activeIndex then
-                        -- [已唱]：灰紫色
-                        canvas:setColor("#7D7090") 
-                        canvas:drawText(charStr, currentX, 0)
-                        
+                        canvas:setColor("#666666")
+                        canvas:drawText(charStr, x, 0)
                     elseif i == activeIndex then
-                        -- [当前]：高亮粉 + 心跳动画
-                        canvas:setColor("#FF6B6B")
-                        canvas:setShadow(15, 0, 0, "#FFFFFFFF")
-                        
-                        -- 0.0 -> 1.0
-                        local charProgress = (timeElapsed % durationPerChar) / durationPerChar
-                        -- 正弦波跳动
-                        local jumpY = -20 * math.sin(charProgress * 3.14) 
-                        local scale = 1.0 + (0.3 * math.sin(charProgress * 3.14))
-                        
-                        canvas:translate(currentX + cw/2, jumpY) 
-                        canvas:scale(scale, scale)
-                        canvas:translate(-(currentX + cw/2), 0)
-                        
-                        canvas:drawText(charStr, currentX, 0)
-                        
+                        canvas:setColor("#FFDDAA")
+                        canvas:setShadow(10, 0, 0, "#66FFDDAA")
+                        canvas:save()
+                        canvas:translate(x + cw/2, 0)
+                        canvas:scale(1.1, 1.1)
+                        canvas:translate(-(x + cw/2), 0)
+                        canvas:drawText(charStr, x, 0)
+                        canvas:restore()
                     else
-                        -- [未唱]：半透明白
-                        canvas:setColor("#80FFFFFF") 
-                        canvas:drawText(charStr, currentX, 0)
+                        canvas:setColor("#222222")
+                        canvas:setShadow(0, 0, 0, 0)
+                        canvas:drawText(charStr, x, 0)
                     end
-                    
-                    canvas:restore()
                     currentX = currentX + cw
                 end
                 
                 canvas:restore()
 
-                -- 4. 底部极简进度条
-                local bottomY = h - 100
-                local barW = w * 0.7
+
+                -- 4. 进度条
+                local barY = h - 60
+                local barW = w * 0.5
+                local progW = barW * state.progress
                 
-                -- 轨道
-                canvas:setColor("#40000000")
-                canvas:drawRoundRect((w-barW)/2, bottomY, (w+barW)/2, bottomY+6, 3)
-                
-                -- 进度
                 if state.progress > 0 then
-                    local progW = barW * state.progress
-                    canvas:setLinearGradient((w-barW)/2, bottomY, (w-barW)/2 + progW, bottomY, "#FF9A9E", "#FECFEF")
-                    canvas:drawRoundRect((w-barW)/2, bottomY, (w-barW)/2 + progW, bottomY+6, 3)
+                    canvas:setColor("#404040")
+                    canvas:drawRoundRect((w-barW)/2, barY, (w+barW)/2, barY+2, 1)
+                    canvas:setColor("#AAAAAA")
+                    canvas:drawRoundRect((w-barW)/2, barY, (w-barW)/2 + progW, barY+2, 1)
                 end
                 
-                -- 左上角时钟
-                canvas:setTextSize(36)
-                canvas:setColor("#66707070")
-                canvas:setTextAlign(0) -- Left
-                canvas:drawText(env.time, 40, 80)
+                -- 5. 显示字体名称 (替代原来的时钟)
+                canvas:setTextSize(32)
+                canvas:setColor("#444444")
+                canvas:setTextAlign(1) -- Center
+                -- 绘制字体名称
+                canvas:drawText(fontDisplayName, w/2, 80)
             end
         """.trimIndent()
-    }
-
-    private fun checkAndRequestPermissions() {
-        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(permission)
-        }
-    }
-
-    private fun hideSystemBars() {
-        val wic = WindowCompat.getInsetsController(window, window.decorView)
-        wic.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        wic.hide(WindowInsetsCompat.Type.systemBars())
     }
 }
