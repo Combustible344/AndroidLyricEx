@@ -25,7 +25,6 @@ import com.example.pra.data.repository.PlayerPrefs
 import com.example.pra.service.MusicService
 import com.example.pra.ui.state.PlayMode
 import com.example.pra.ui.state.PlayerUiState
-import com.example.pra.utils.AudioVisualizerData
 import com.example.pra.utils.LyricParser
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors

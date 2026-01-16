@@ -1,9 +1,5 @@
 package com.example.pra
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-
-
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -15,16 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
@@ -39,12 +27,13 @@ import com.example.pra.ui.screens.PlayerScreen
 import com.example.pra.ui.theme.PraTheme
 import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 import com.example.pra.utils.LuaScriptEngine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.example.pra.R
 
 data class ScreenSaverAnimState(
     val timeString: String,
@@ -56,7 +45,6 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MusicPlayerViewModel by viewModels()
     private lateinit var luaEngine: LuaScriptEngine
 
-    // ★★★ 修复 1: 使用 RequestMultiplePermissions 一次请求多个权限 ★★★
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -73,7 +61,6 @@ class MainActivity : ComponentActivity() {
 
         luaEngine = LuaScriptEngine(this)
 
-        // ★★★ 加载策略：会注入路径变量 ★★★
         loadScriptStrategy()
 
         enableEdgeToEdge()
@@ -85,7 +72,7 @@ class MainActivity : ComponentActivity() {
                 val uiState by viewModel.uiState.collectAsState()
                 var interactionSignal by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-                // 时间更新逻辑
+                // 1. 系统时间更新 (1秒一次，用于传给 Lua 显示时间，非动画用)
                 var timeString by remember { mutableStateOf("") }
                 LaunchedEffect(Unit) {
                     val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -95,12 +82,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // 2. 歌词注入逻辑 (切歌时触发)
                 LaunchedEffect(uiState.lyrics) {
                     if (uiState.lyrics.isNotEmpty()) {
-                        // 在 IO 线程做字符串拼接，防止卡 UI
                         withContext(Dispatchers.IO) {
                             val luaCode = luaEngine.convertLyricsToLuaTable(uiState.lyrics)
-                            // 注入动作必须很快，可以直接在 IO 线程调用 evaluate (Luaj 是线程安全的吗？如果不确定，切回 Main)
                             withContext(Dispatchers.Main) {
                                 luaEngine.evaluate(luaCode)
                             }
@@ -112,12 +98,25 @@ class MainActivity : ComponentActivity() {
 
                 var isPlaylistOpen by remember { mutableStateOf(false) }
 
-                // 歌词切换动画信号
+                // 3. 歌词切换时的淡入动画信号
                 val alphaAnim = remember { Animatable(0f) }
                 LaunchedEffect(uiState.currentLyricLine) {
                     alphaAnim.snapTo(0f)
                     alphaAnim.animateTo(1f, tween(600, easing = FastOutSlowInEasing))
                 }
+
+                // 4. ★★★ 60FPS 心跳驱动器 ★★★
+                // 这是一个无限循环的动画值，它的存在是为了强迫 Compose 每帧重绘 Canvas
+                val infiniteTransition = rememberInfiniteTransition(label = "render_beat")
+                val frameBeat by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = 1000f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(10000, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "frame_beat"
+                )
 
                 val animState = ScreenSaverAnimState(timeString, alphaAnim.value)
 
@@ -127,6 +126,9 @@ class MainActivity : ComponentActivity() {
                     externalInteractionSignal = interactionSignal,
                     isEnabled = !isPlaylistOpen,
                     renderer = ScreenSaverRenderer { scope, env, animData ->
+                        // ★★★ 读取心跳值，触发每帧重绘 ★★★
+                        val trigger = frameBeat
+
                         scope.drawIntoCanvas { canvas ->
                             luaEngine.executeDraw(
                                 canvas = canvas.nativeCanvas,
@@ -148,40 +150,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * ★★★ 核心修改：脚本加载策略 ★★★
-     */
     private fun loadScriptStrategy() {
-        // 1. 确定脚本目录: /Android/data/com.example.pra/files/lua_scripts/
         val scriptDir = File(getExternalFilesDir(null), "lua_scripts")
         if (!scriptDir.exists()) scriptDir.mkdirs()
 
         val scriptFile = File(scriptDir, "draw.lua")
-
-        // 2. 准备注入代码：将路径作为全局变量 script_dir 注入到 Lua 环境中
-        // 这样 Lua 脚本就可以用 script_dir .. "/font.ttf" 来引用文件了
         val pathInjection = "script_dir = \"${scriptDir.absolutePath.replace("\\", "\\\\")}\"\n"
 
         if (scriptFile.exists()) {
             try {
                 val userScript = scriptFile.readText()
-                // 拼接：路径变量定义 + 用户代码
                 luaEngine.loadScript(pathInjection + userScript)
-
                 Toast.makeText(this, "已加载外部配置", Toast.LENGTH_SHORT).show()
-                Log.d("LuaLoader", "Loaded script from: ${scriptFile.absolutePath}")
             } catch (e: Exception) {
                 Toast.makeText(this, "外部脚本错误，降级默认", Toast.LENGTH_LONG).show()
                 luaEngine.loadScript(pathInjection + DEFAULT_LUA_SCRIPT)
             }
         } else {
-            // 写入默认模板
-            try {
-                scriptFile.writeText(DEFAULT_LUA_SCRIPT)
-            } catch (e: Exception) {
-                Log.e("LuaLoader", "Write template failed", e)
-            }
-            // 加载内置 (同样注入路径)
+            try { scriptFile.writeText(DEFAULT_LUA_SCRIPT) } catch (e: Exception) { }
             luaEngine.loadScript(pathInjection + DEFAULT_LUA_SCRIPT)
             Toast.makeText(this, "使用内置默认配置", Toast.LENGTH_SHORT).show()
         }
@@ -189,7 +175,6 @@ class MainActivity : ComponentActivity() {
 
     private fun checkAndRequestPermissions() {
         val permissions = mutableListOf<String>()
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.READ_MEDIA_AUDIO)
         } else {
@@ -202,7 +187,6 @@ class MainActivity : ComponentActivity() {
         }.toTypedArray()
 
         if (permissionsToRequest.isNotEmpty()) {
-            // 使用 registerForActivityResult 的 launch 传入数组
             requestPermissionLauncher.launch(permissionsToRequest)
         }
     }
@@ -215,15 +199,12 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private val DEFAULT_LUA_SCRIPT = """
--- [[ Minimalist True Karaoke Version (Adapted) ]] --
+-- [[ Ultimate Karaoke: Fixed Layout & Align ]] --
 
--- 1. 字体加载
+-- 1. 资源加载
 local fontName = "SourceHanSansCN-Normal.ttf"
-local fontLoaded = false
-local fontPath = fontName
-if script_dir ~= nil then fontPath = script_dir .. "/" .. fontName end
+local fontPath = (script_dir or "") .. "/" .. fontName
 local customFont = tools.loadFont(fontPath)
-if customFont then fontLoaded = true end
 
 function onDraw(state, env)
     local w = env.width
@@ -231,70 +212,58 @@ function onDraw(state, env)
     local cx = w / 2
     local cy = h / 2
 
-    -- 1. 纯黑背景
-    -- ★★★ 适配点：你的 Adapter 没有 drawRect，用 drawRoundRect 代替 ★★★
-    canvas:setColor("#000000")
-    canvas:drawRoundRect(0, 0, w, h, 0)
+    -- 1. 画背景
+    canvas:drawRect(0, 0, w, h, "#000000")
     
-    -- ★★★ 适配点：现在 setTypeface 可以用了 ★★★
-    if fontLoaded then canvas:setTypeface(customFont) else canvas:setTypeface(nil) end
+    if customFont then canvas:setTypeface(customFont) else canvas:setTypeface(nil) end
 
-    -- 2. 获取数据
+    -- 2. 准备数据
     local allLyrics = global_lyrics
-    -- Kotlin 传的是 0 起始，Lua 表是 1 起始，所以 +1
     local lineIdx = (state.currentLyricIndex or -1) + 1
+    local currentLineObj = allLyrics and allLyrics[lineIdx] or nil
     
-    local currentLineObj = nil
-    if allLyrics and lineIdx > 0 and lineIdx <= #allLyrics then
-        currentLineObj = allLyrics[lineIdx]
+    -- 如果没有歌词，显示标题
+    if not currentLineObj then
+        drawPlaceholder(state, env, cx, cy)
+        return
     end
 
-    -- 3. 准备渲染单元 (renderUnits)
+    -- 3. 准备渲染单元
     local renderUnits = {}
-    local useWordTime = false 
-
-    if currentLineObj then
-        -- A. 有歌词数据
-        if currentLineObj.words and #currentLineObj.words > 0 then
-            -- A1. 有逐字时间戳 (Rich Lyrics)
-            renderUnits = currentLineObj.words
-            useWordTime = true
-        else
-            -- A2. 普通歌词 -> 拆分成单字
-            local chars = tools.toChars(currentLineObj.text)
-            for k, v in pairs(chars) do
-                 table.insert(renderUnits, { text = v, st = 0, et = 0 })
-            end
-        end
+    local useWordTime = false
+    
+    if currentLineObj.words and #currentLineObj.words > 0 then
+        renderUnits = currentLineObj.words
+        useWordTime = true
     else
-        -- B. 没有歌词 (显示歌名)
-        local title = state.songTitle
-        if title == nil or title == "" then title = "Listening..." end
-        local chars = tools.toChars(title)
+        -- 降级：拆单字
+        local chars = tools.toChars(currentLineObj.text)
         for k, v in pairs(chars) do
              table.insert(renderUnits, { text = v, st = 0, et = 0 })
         end
     end
 
-    -- 4. 布局计算 (排版 & 换行)
+    -- 4. 自动换行排版
     local fontSize = env.isPortrait and 90 or 120
     canvas:setTextSize(fontSize)
     
-    local maxLineWidth = w * 0.9
+    -- ★★★ 修复核心：必须强制重置为左对齐，防止被 drawPlaceholder 污染 ★★★
+    canvas:setTextAlign(0) 
+    
+    local centerOffset = canvas:getTextCenterOffset()
+    
+    local maxLineWidth = w * 0.85
     local lines = {}
     local currentLineUnits = {}
     local currentWidth = 0
     
     for i, unit in ipairs(renderUnits) do
         local unitW = canvas:measureText(unit.text)
-        
-        -- 换行判断
         if currentWidth + unitW > maxLineWidth and #currentLineUnits > 0 then
             table.insert(lines, { units = currentLineUnits, width = currentWidth })
             currentLineUnits = {}
             currentWidth = 0
         end
-        
         unit.drawWidth = unitW
         table.insert(currentLineUnits, unit)
         currentWidth = currentWidth + unitW
@@ -303,62 +272,125 @@ function onDraw(state, env)
         table.insert(lines, { units = currentLineUnits, width = currentWidth })
     end
 
-    -- 5. 绘制循环
-    local lineHeight = fontSize * 1.4
-    local totalHeight = #lines * lineHeight
-    local startY = cy - (totalHeight / 2) + (fontSize / 2) * 0.8 
-
+    -- 5. 进出场动画计算
+    local animAlpha = 255
+    local animOffsetY = 0
     local currentPos = state.position or 0
+    local lineSt = currentLineObj.startTime
+    local lineEt = currentLineObj.endTime
     
+    -- 进场 (Fade In + Slide Up)
+    if currentPos < lineSt + 400 then
+        local t = currentPos - lineSt
+        animAlpha = anim:clamp(anim:map(t, 0, 400, 0, 255), 0, 255)
+        animOffsetY = anim:clamp(anim:map(t, 0, 400, 50, 0), 0, 50)
+    end
+    
+    -- 离场 (Fade Out + Slide Up)
+    if currentPos > lineEt - 300 then
+        local t = currentPos - (lineEt - 300)
+        animAlpha = anim:clamp(anim:map(t, 0, 300, 255, 0), 0, 255)
+        animOffsetY = anim:clamp(anim:map(t, 0, 300, 0, -50), -50, 0)
+    end
+    
+    -- 6. 渲染循环
+    local lineHeight = fontSize * 1.5
+    local totalBlockHeight = #lines * lineHeight
+    local startY = cy - (totalBlockHeight / 2) + (lineHeight / 2) - centerOffset + animOffsetY
+
     for lIdx, line in ipairs(lines) do
         local lineY = startY + (lIdx - 1) * lineHeight
+        -- 计算这一行的起始 X (水平居中)
         local currentX = cx - (line.width / 2)
         
         for uIdx, unit in ipairs(line.units) do
             local x = currentX
             local y = lineY
             
-            -- 颜色逻辑
-            local color = "#888888" 
-            local scale = 1.0
+            canvas:save()
+            canvas:setAlpha(animAlpha)
             
-            if not currentLineObj then
-                color = "#FFFFFF" 
-            elseif useWordTime then
-                -- 真·逐字
-                if currentPos >= unit.st and currentPos < unit.et then
-                    color = "#FF3366" -- 高亮色
-                    local breath = math.sin(currentPos / 150) * 0.15
-                    scale = 1.2 + breath
-                elseif currentPos >= unit.et then
-                    color = "#FFFFFF" -- 已唱过
-                else
-                    color = "#444444" -- 未唱
+            -- === 状态判定 ===
+            local isPast = false
+            local isActive = false
+            local fillPercent = 0.0
+            
+            if useWordTime then
+                if currentPos >= unit.et then
+                    isPast = true
+                elseif currentPos >= unit.st then
+                    isActive = true
+                    local dur = unit.et - unit.st
+                    if dur > 0 then
+                        fillPercent = (currentPos - unit.st) / dur
+                    else
+                        fillPercent = 1.0
+                    end
                 end
             else
-                -- 普通行
-                color = "#FFFFFF"
+                isPast = true 
             end
             
-            -- 执行绘制
-            canvas:save()
-            canvas:translate(x + unit.drawWidth / 2, y)
-            canvas:scale(scale, scale)
-            canvas:translate(-(x + unit.drawWidth / 2), -y)
-            
-            canvas:setColor(color)
-            if scale > 1.0 then
-                canvas:setShadow(20, 0, 0, color)
-            else
-                canvas:setShadow(0, 0, 0, 0)
+            -- A. 底层 (灰色)
+            if not isPast then
+                canvas:setColor("#888888") 
+                canvas:drawText(unit.text, x, y)
             end
             
-            canvas:drawText(unit.text, x, y)
-            canvas:restore()
+            -- B. 顶层 (白色/高亮)
+            if isPast then
+                -- 全亮
+                canvas:setColor("#FFFFFF")
+                canvas:drawText(unit.text, x, y)
+                
+            elseif isActive then
+                -- 逐字填充 (Clip)
+                local fillWidth = unit.drawWidth * fillPercent
+                
+                canvas:save()
+                -- 裁剪区域：左边 fillWidth 的部分
+                -- 稍微扩大上下边界防止字体被切头
+                canvas:clipRect(x, y - fontSize * 1.2, x + fillWidth, y + fontSize * 0.5)
+                
+                canvas:setColor("#FFFFFF")
+                -- 呼吸效果
+                local breath = anim:sineWave(env.systemTime, 600, 1.0, 1.1)
+                
+                -- 注意：如果在裁剪状态下做缩放，必须以文字左侧为锚点，否则会错位
+                -- 简单起见，这里只变色和发光，不缩放，保证对齐绝对精准
+                canvas:setShadow(30, 0, 0, "#FF3366")
+                
+                canvas:drawText(unit.text, x, y)
+                canvas:restore()
+            end
             
+            canvas:restore() 
+            
+            -- 移动 X 坐标到下一个字
             currentX = currentX + unit.drawWidth
         end
     end
+end
+
+function drawPlaceholder(state, env, cx, cy)
+    local text = state.songTitle
+    if text == nil or text == "" then text = "Listening..." end
+    
+    canvas:setTextSize(60)
+    canvas:setColor("#FFFFFF")
+    -- 这里设置了居中，如果不重置，会影响上面的 onDraw
+    canvas:setTextAlign(1) 
+    
+    local scale = anim:sineWave(env.systemTime, 2000, 0.95, 1.05)
+    
+    canvas:save()
+    canvas:translate(cx, cy)
+    canvas:scale(scale, scale)
+    canvas:translate(-cx, -cy)
+    
+    local dy = canvas:getTextCenterOffset()
+    canvas:drawText(text, cx, cy + dy)
+    canvas:restore()
 end
         """.trimIndent()
     }

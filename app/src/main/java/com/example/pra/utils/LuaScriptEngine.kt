@@ -21,24 +21,22 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
 
 class LuaScriptEngine(private val context: Context) {
 
     private val globals: Globals = JsePlatform.standardGlobals()
     private val adapter = LuaCanvasAdapter()
-    private var luaOnDrawFunction: LuaValue = LuaValue.NIL
+    // ★★★ 新增: 动画助手 ★★★
+    private val animHelper = LuaAnimHelper()
 
+    private var luaOnDrawFunction: LuaValue = LuaValue.NIL
     private val stateTable = LuaTable()
     private val envTable = LuaTable()
     private val fontCache = HashMap<String, Typeface>()
-
-    // 脚本目录
     private val scriptDir = File(context.getExternalFilesDir(null), "lua_scripts")
 
-    // ★★★ 核心修改：错误去重变量 ★★★
-    // 记录上一次写入日志的错误信息，只有内容变了才写新的
     private var lastLoggedErrorMessage: String = ""
-
     private val errorPaint = Paint().apply {
         color = Color.RED
         textSize = 50f
@@ -48,9 +46,14 @@ class LuaScriptEngine(private val context: Context) {
     }
 
     init {
+        // 1. 注入绘图能力
         globals.set("canvas", CoerceJavaToLua.coerce(adapter))
-        val tools = LuaTable()
 
+        // 2. ★★★ 注入动画计算能力 ★★★
+        globals.set("anim", CoerceJavaToLua.coerce(animHelper))
+
+        // 3. 注入工具类
+        val tools = LuaTable()
         tools.set("toChars", object : OneArgFunction() {
             override fun call(arg: LuaValue): LuaValue {
                 val str = arg.checkjstring() ?: return LuaTable()
@@ -71,18 +74,14 @@ class LuaScriptEngine(private val context: Context) {
         tools.set("loadFont", object : OneArgFunction() {
             override fun call(arg: LuaValue): LuaValue {
                 val path = arg.checkjstring() ?: return LuaValue.NIL
-                if (fontCache.containsKey(path)) {
-                    return CoerceJavaToLua.coerce(fontCache[path])
-                }
+                if (fontCache.containsKey(path)) return CoerceJavaToLua.coerce(fontCache[path])
                 var typeface: Typeface? = null
                 try {
                     typeface = Typeface.createFromAsset(context.assets, path)
                 } catch (e: Exception) {
                     try {
                         val file = File(path)
-                        if (file.exists()) {
-                            typeface = Typeface.createFromFile(file)
-                        }
+                        if (file.exists()) typeface = Typeface.createFromFile(file)
                     } catch (e2: Exception) {
                         Log.e("LuaScriptEngine", "Failed to load font: $path")
                     }
@@ -90,9 +89,7 @@ class LuaScriptEngine(private val context: Context) {
                 return if (typeface != null) {
                     fontCache[path] = typeface
                     CoerceJavaToLua.coerce(typeface)
-                } else {
-                    LuaValue.NIL
-                }
+                } else LuaValue.NIL
             }
         })
 
@@ -106,24 +103,17 @@ class LuaScriptEngine(private val context: Context) {
             val chunk = globals.load(scriptContent)
             chunk.call()
             luaOnDrawFunction = globals.get("onDraw")
-
-            // ★★★ 重置错误状态 ★★★
-            // 每次重新加载脚本时，清除历史错误记录，这样新出现的错误能被记录
             lastLoggedErrorMessage = ""
-
-        } catch (e: Exception) {
-            handleError(e)
-        }
+        } catch (e: Exception) { handleError(e) }
     }
 
     fun evaluate(scriptCode: String) {
         try {
             globals.load(scriptCode).call()
-        } catch (e: Exception) {
-            handleError(e) // 注入代码出错也记录
-        }
+        } catch (e: Exception) { handleError(e) }
     }
 
+    // ★★★ 核心：每帧绘制与状态注入 ★★★
     fun executeDraw(
         canvas: Canvas,
         uiState: PlayerUiState,
@@ -140,55 +130,78 @@ class LuaScriptEngine(private val context: Context) {
         }
 
         try {
+            // --- 1. 数据预计算 ---
             val totalSeconds = parseTimeToSeconds(uiState.totalTime)
             val totalMs = totalSeconds * 1000L
             val currentPosMs = (totalMs * uiState.progress).toLong()
 
+            // --- 2. 注入全面状态 (State Table) ---
+
+            // 基础信息
             stateTable.set("title", LuaValue.valueOf(uiState.songTitle))
             stateTable.set("artist", LuaValue.valueOf(uiState.artistName))
+            stateTable.set("currentTime", LuaValue.valueOf(uiState.currentTime)) // 字符串 "03:20"
+            stateTable.set("totalTime", LuaValue.valueOf(uiState.totalTime))     // 字符串 "05:00"
+
+            // 数值状态 (方便计算)
             stateTable.set("isPlaying", LuaValue.valueOf(uiState.isPlaying))
-            stateTable.set("progress", LuaValue.valueOf(uiState.progress.toDouble()))
-            stateTable.set("currentTime", LuaValue.valueOf(uiState.currentTime))
-            stateTable.set("totalTime", LuaValue.valueOf(uiState.totalTime))
+            stateTable.set("position", LuaValue.valueOf(currentPosMs.toDouble())) // 毫秒
+            stateTable.set("duration", LuaValue.valueOf(totalMs.toDouble()))       // 毫秒
+            stateTable.set("progress", LuaValue.valueOf(uiState.progress.toDouble())) // 0.0 ~ 1.0
+            stateTable.set("volume", LuaValue.valueOf(uiState.volume.toDouble()))     // 0.0 ~ 1.0
+
+            // 播放模式与互动
+            stateTable.set("playMode", LuaValue.valueOf(uiState.playMode.name)) // "LoopOne" or "Shuffle"
             stateTable.set("isLiked", LuaValue.valueOf(uiState.isCurrentSongLiked))
+            stateTable.set("likedCount", LuaValue.valueOf(uiState.currentSongLikedCount))
+
+            // 歌词定位状态
+            // Kotlin 0 起始，Lua 1 起始习惯，这里不转换，让 Lua 自己 +1 比较灵活
             stateTable.set("currentLyricIndex", LuaValue.valueOf(uiState.currentLyricIndex))
             stateTable.set("currentWordIndex", LuaValue.valueOf(uiState.currentWordIndex))
 
+            // 当前行快捷方式 (方便简单脚本直接用，不用去查表)
             val line = uiState.currentLyricLine
             stateTable.set("lyric", LuaValue.valueOf(line?.text ?: ""))
-            stateTable.set("position", LuaValue.valueOf(currentPosMs.toDouble()))
             stateTable.set("lineStart", LuaValue.valueOf(line?.startTime?.toDouble() ?: 0.0))
             stateTable.set("lineEnd", LuaValue.valueOf(line?.endTime?.toDouble() ?: 0.0))
 
+            // ★★★ 新增：当前行进度 (Line Progress) ★★★
+            // 0.0 ~ 1.0，表示当前这句歌词唱了多少。做 KTV 抹擦效果神器
+            var lineProg = 0.0
+            if (line != null) {
+                val duration = line.endTime - line.startTime
+                if (duration > 0) {
+                    val elapsed = currentPosMs - line.startTime
+                    lineProg = (elapsed.toDouble() / duration).coerceIn(0.0, 1.0)
+                }
+            }
+            stateTable.set("lineProgress", LuaValue.valueOf(lineProg))
+
+            // --- 3. 注入环境参数 (Env Table) ---
             envTable.set("time", LuaValue.valueOf(timeString))
+            envTable.set("systemTime", LuaValue.valueOf(System.currentTimeMillis().toDouble())) // 系统绝对时间
             envTable.set("width", LuaValue.valueOf(width.toDouble()))
             envTable.set("height", LuaValue.valueOf(height.toDouble()))
-            envTable.set("anim", LuaValue.valueOf(animValue.toDouble()))
             envTable.set("isPortrait", LuaValue.valueOf(height > width))
+            envTable.set("anim", LuaValue.valueOf(animValue.toDouble())) // 切歌动画值
 
+            // --- 4. 执行 ---
             luaOnDrawFunction.call(stateTable, envTable)
 
         } catch (e: Exception) {
-            // ★★★ 绘制时的错误处理 ★★★
-            // 1. 记录日志 (带去重)
             handleError(e)
-
-            // 2. 屏幕显示简化提示
             canvas.save()
             adapter.setTypeface(null)
             adapter.setTextSize(50f)
-            // 在屏幕正中央画红字
-            canvas.drawText("脚本出错请查看日志 (Script Error)", width / 2, height / 2, errorPaint)
+            canvas.drawText("Script Error (See Log)", width / 2, height / 2, errorPaint)
             canvas.restore()
         }
     }
 
-    // ★★★ 统一的错误处理与文件写入逻辑 ★★★
+    // 错误处理与日志 (保持不变)
     private fun handleError(e: Exception) {
         val currentMsg = e.message ?: e.toString()
-
-        // 核心逻辑：如果这次的错误信息和上一次记录的一模一样，就直接忽略
-        // 只有不一样的错误才写入文件
         if (currentMsg != lastLoggedErrorMessage) {
             logErrorToFile(e)
             lastLoggedErrorMessage = currentMsg
@@ -199,46 +212,23 @@ class LuaScriptEngine(private val context: Context) {
         try {
             if (!scriptDir.exists()) scriptDir.mkdirs()
             val logFile = File(scriptDir, "err.log")
-
-            val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            val timestamp = timeFormat.format(Date())
-
+            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
             val sw = StringWriter()
             val pw = PrintWriter(sw)
             e.printStackTrace(pw)
-            val stackTrace = sw.toString()
-
-            val logContent = """
-                ==================================================
-                [Time]: $timestamp
-                [Error]: ${e.message}
-                [Stack Trace]:
-                $stackTrace
-                
-            """.trimIndent()
-
-            // true 表示追加模式 (append)
-            FileWriter(logFile, true).use { writer ->
-                writer.write(logContent)
-            }
-
+            val logContent = "== [Time]: $timestamp ==\n[Error]: ${e.message}\n[Stack]:\n$sw\n"
+            FileWriter(logFile, true).use { it.write(logContent) }
             Log.e("LuaScriptEngine", "New error logged to ${logFile.absolutePath}")
-
-        } catch (ioe: Exception) {
-            Log.e("LuaScriptEngine", "Failed to write error log", ioe)
-        }
+        } catch (ioe: Exception) { }
     }
 
     private fun parseTimeToSeconds(timeStr: String): Int {
         val parts = timeStr.split(":")
         if (parts.size != 2) return 0
-        return try {
-            parts[0].toInt() * 60 + parts[1].toInt()
-        } catch (e: Exception) {
-            0
-        }
+        return try { parts[0].toInt() * 60 + parts[1].toInt() } catch (e: Exception) { 0 }
     }
 
+    // 歌词转 Lua 表 (保持不变)
     fun convertLyricsToLuaTable(lyrics: List<LyricLine>): String {
         val sb = StringBuilder(lyrics.size * 100)
         sb.append("global_lyrics = {\n")
