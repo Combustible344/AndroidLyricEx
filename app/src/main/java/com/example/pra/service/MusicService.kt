@@ -1,10 +1,13 @@
 package com.example.pra.service
 
 import android.content.Intent
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
@@ -15,6 +18,7 @@ class MusicService : MediaSessionService() {
     // 与外界通信的会话窗口
     private var mediaSession: MediaSession? = null
 
+    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
 
@@ -31,6 +35,9 @@ class MusicService : MediaSessionService() {
 
         // 2. 创建会话
         mediaSession = MediaSession.Builder(this, player!!).build()
+
+        // ★★★ 新增：设置通知提供者，防止服务被杀 ★★★
+        setMediaNotificationProvider(DefaultMediaNotificationProvider(this))
     }
 
     // 当 UI 连接服务时，返回这个会话

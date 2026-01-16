@@ -1,5 +1,9 @@
 package com.example.pra
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -88,6 +92,21 @@ class MainActivity : ComponentActivity() {
                     while (true) {
                         timeString = formatter.format(Date())
                         delay(1000)
+                    }
+                }
+
+                LaunchedEffect(uiState.lyrics) {
+                    if (uiState.lyrics.isNotEmpty()) {
+                        // 在 IO 线程做字符串拼接，防止卡 UI
+                        withContext(Dispatchers.IO) {
+                            val luaCode = luaEngine.convertLyricsToLuaTable(uiState.lyrics)
+                            // 注入动作必须很快，可以直接在 IO 线程调用 evaluate (Luaj 是线程安全的吗？如果不确定，切回 Main)
+                            withContext(Dispatchers.Main) {
+                                luaEngine.evaluate(luaCode)
+                            }
+                        }
+                    } else {
+                        luaEngine.evaluate("global_lyrics = {}")
                     }
                 }
 
@@ -196,9 +215,9 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private val DEFAULT_LUA_SCRIPT = """
-          -- [[ Midnight Large Text & Auto-Wrap Version ]] --
+-- [[ Minimalist True Karaoke Version (Adapted) ]] --
 
--- ★★★ 1. 字体加载逻辑 ★★★
+-- 1. 字体加载
 local fontName = "SourceHanSansCN-Normal.ttf"
 local fontLoaded = false
 local fontPath = fontName
@@ -212,157 +231,136 @@ function onDraw(state, env)
     local cx = w / 2
     local cy = h / 2
 
-    -- 1. 背景
+    -- 1. 纯黑背景
+    -- ★★★ 适配点：你的 Adapter 没有 drawRect，用 drawRoundRect 代替 ★★★
     canvas:setColor("#000000")
     canvas:drawRoundRect(0, 0, w, h, 0)
     
+    -- ★★★ 适配点：现在 setTypeface 可以用了 ★★★
     if fontLoaded then canvas:setTypeface(customFont) else canvas:setTypeface(nil) end
 
-    -- 2. AOD 时钟 (稍微上移一点，给大歌词腾地方)
-    canvas:setTextAlign(1)
-    canvas:setTextSize(100) -- 时钟字号
-    canvas:setColor("#33FFFFFF")
-    canvas:drawText(env.time, cx, h * 0.15) -- 上移到 15% 处
+    -- 2. 获取数据
+    local allLyrics = global_lyrics
+    -- Kotlin 传的是 0 起始，Lua 表是 1 起始，所以 +1
+    local lineIdx = (state.currentLyricIndex or -1) + 1
     
-    -- 3. 核心歌词显示 (自动换行 + 大字体)
-    canvas:save()
-    canvas:translate(cx, cy) 
-
-    local text = state.lyric
-    local isPlaceholder = false
-    if text == "" then 
-        text = state.title 
-        isPlaceholder = true
+    local currentLineObj = nil
+    if allLyrics and lineIdx > 0 and lineIdx <= #allLyrics then
+        currentLineObj = allLyrics[lineIdx]
     end
 
-    local chars = toChars(text)
-    local charCount = #chars
-    
-    -- ★★★ 配置区域 ★★★
-    -- 字号大幅提升
-    local fontSize = env.isPortrait and 80 or 100
-    local lineHeight = fontSize * 1.3 -- 行高 (字号的1.3倍)
-    local maxLineWidth = w * 0.85   -- 每一行最宽只允许占屏幕的 85%
-    
-    canvas:setTextSize(fontSize)
+    -- 3. 准备渲染单元 (renderUnits)
+    local renderUnits = {}
+    local useWordTime = false 
 
-    -- ★★★ 步骤 A: 预计算分行 (Wrapping Logic) ★★★
-    local lines = {}      -- 存放每一行的数据
-    local currentLine = {} -- 当前正在拼凑的行
-    local currentWidth = 0 
+    if currentLineObj then
+        -- A. 有歌词数据
+        if currentLineObj.words and #currentLineObj.words > 0 then
+            -- A1. 有逐字时间戳 (Rich Lyrics)
+            renderUnits = currentLineObj.words
+            useWordTime = true
+        else
+            -- A2. 普通歌词 -> 拆分成单字
+            local chars = tools.toChars(currentLineObj.text)
+            for k, v in pairs(chars) do
+                 table.insert(renderUnits, { text = v, st = 0, et = 0 })
+            end
+        end
+    else
+        -- B. 没有歌词 (显示歌名)
+        local title = state.songTitle
+        if title == nil or title == "" then title = "Listening..." end
+        local chars = tools.toChars(title)
+        for k, v in pairs(chars) do
+             table.insert(renderUnits, { text = v, st = 0, et = 0 })
+        end
+    end
+
+    -- 4. 布局计算 (排版 & 换行)
+    local fontSize = env.isPortrait and 90 or 120
+    canvas:setTextSize(fontSize)
     
-    for i = 1, charCount do
-        local charStr = chars[i]
-        local charW = canvas:measureText(charStr)
+    local maxLineWidth = w * 0.9
+    local lines = {}
+    local currentLineUnits = {}
+    local currentWidth = 0
+    
+    for i, unit in ipairs(renderUnits) do
+        local unitW = canvas:measureText(unit.text)
         
-        -- 如果加上这个字会超宽，且当前行不是空的，就换行
-        if currentWidth + charW > maxLineWidth and #currentLine > 0 then
-            table.insert(lines, { chars = currentLine, totalW = currentWidth })
-            currentLine = {}
+        -- 换行判断
+        if currentWidth + unitW > maxLineWidth and #currentLineUnits > 0 then
+            table.insert(lines, { units = currentLineUnits, width = currentWidth })
+            currentLineUnits = {}
             currentWidth = 0
         end
         
-        -- 将字加入当前行 (同时记录它是全文第几个字，用于高亮)
-        table.insert(currentLine, { str = charStr, w = charW, globalIndex = i })
-        currentWidth = currentWidth + charW
+        unit.drawWidth = unitW
+        table.insert(currentLineUnits, unit)
+        currentWidth = currentWidth + unitW
     end
-    -- 别忘了把最后一行加进去
-    if #currentLine > 0 then
-        table.insert(lines, { chars = currentLine, totalW = currentWidth })
-    end
-
-    -- ★★★ 步骤 B: 计算卡拉OK高亮进度 ★★★
-    local activeIndex = 0
-    if not isPlaceholder and state.isPlaying then
-        local lineDuration = state.lineEnd - state.lineStart
-        local timeElapsed = state.position - state.lineStart
-        if lineDuration <= 0 then lineDuration = 1 end
-        
-        local progressPercent = timeElapsed / lineDuration
-        if progressPercent < 0 then progressPercent = 0 end
-        if progressPercent > 1 then progressPercent = 1 end
-        activeIndex = math.floor(progressPercent * charCount) + 1
+    if #currentLineUnits > 0 then
+        table.insert(lines, { units = currentLineUnits, width = currentWidth })
     end
 
-    -- ★★★ 步骤 C: 绘制多行文字 (垂直居中) ★★★
-    local totalBlockHeight = #lines * lineHeight
-    -- 计算第一行的 Y 坐标 (从中心点向上偏移总高度的一半，再修正字体的基线)
-    -- 文字通常以基线绘制，所以为了垂直居中，需要向下偏移半个行高左右
-    local startY = -(totalBlockHeight / 2) + (lineHeight / 2) * 0.6 
+    -- 5. 绘制循环
+    local lineHeight = fontSize * 1.4
+    local totalHeight = #lines * lineHeight
+    local startY = cy - (totalHeight / 2) + (fontSize / 2) * 0.8 
 
-    for l = 1, #lines do
-        local lineData = lines[l]
-        local lineChars = lineData.chars
+    local currentPos = state.position or 0
+    
+    for lIdx, line in ipairs(lines) do
+        local lineY = startY + (lIdx - 1) * lineHeight
+        local currentX = cx - (line.width / 2)
         
-        -- 每一行都在水平方向居中
-        local currentX = -(lineData.totalW / 2)
-        local currentY = startY + (l - 1) * lineHeight
-        
-        for c = 1, #lineChars do
-            local charObj = lineChars[c]
-            local globalIdx = charObj.globalIndex
+        for uIdx, unit in ipairs(line.units) do
             local x = currentX
+            local y = lineY
             
-            -- 绘图逻辑 (和之前一样，只是判断条件变成了 globalIdx)
-            if isPlaceholder then
-                canvas:setColor("#AAAAAA")
-                canvas:setShadow(0,0,0,0)
-                canvas:drawText(charObj.str, x, currentY)
-            else
-                if globalIdx < activeIndex then
-                    -- 已唱过
-                    canvas:setColor("#444444")
-                    canvas:setShadow(0, 0, 0, 0)
-                    canvas:drawText(charObj.str, x, currentY)
-                elseif globalIdx == activeIndex then
-                    -- 当前唱到的字 (呼吸效果)
-                    local breath = math.sin(state.position / 200) * 0.1 
-                    
-                    canvas:save()
-                    -- 注意：缩放中心点应该是字符的中心 (x + w/2, currentY - size/2 左右)
-                    -- 这里简单处理：以基线中心缩放
-                    canvas:translate(x + charObj.w/2, currentY)
-                    canvas:scale(1.2 + breath, 1.2 + breath)
-                    canvas:translate(-(x + charObj.w/2), -currentY)
-                    
-                    canvas:setColor("#FFFFFF")
-                    canvas:setShadow(30, 0, 0, "#FFFFFFFF")
-                    canvas:drawText(charObj.str, x, currentY)
-                    canvas:restore()
+            -- 颜色逻辑
+            local color = "#888888" 
+            local scale = 1.0
+            
+            if not currentLineObj then
+                color = "#FFFFFF" 
+            elseif useWordTime then
+                -- 真·逐字
+                if currentPos >= unit.st and currentPos < unit.et then
+                    color = "#FF3366" -- 高亮色
+                    local breath = math.sin(currentPos / 150) * 0.15
+                    scale = 1.2 + breath
+                elseif currentPos >= unit.et then
+                    color = "#FFFFFF" -- 已唱过
                 else
-                    -- 未唱
-                    canvas:setColor("#888888")
-                    canvas:setShadow(0, 0, 0, 0)
-                    canvas:drawText(charObj.str, x, currentY)
+                    color = "#444444" -- 未唱
                 end
+            else
+                -- 普通行
+                color = "#FFFFFF"
             end
             
-            currentX = currentX + charObj.w
+            -- 执行绘制
+            canvas:save()
+            canvas:translate(x + unit.drawWidth / 2, y)
+            canvas:scale(scale, scale)
+            canvas:translate(-(x + unit.drawWidth / 2), -y)
+            
+            canvas:setColor(color)
+            if scale > 1.0 then
+                canvas:setShadow(20, 0, 0, color)
+            else
+                canvas:setShadow(0, 0, 0, 0)
+            end
+            
+            canvas:drawText(unit.text, x, y)
+            canvas:restore()
+            
+            currentX = currentX + unit.drawWidth
         end
     end
-    canvas:restore()
-
-    -- 4. 进度条 (底部)
-    local barY = h - 80
-    local barWidth = w * 0.6
-    local startX = (w - barWidth) / 2
-    
-    canvas:setColor("#1AFFFFFF")
-    canvas:drawRoundRect(startX, barY, startX + barWidth, barY + 4, 2)
-    
-    if state.totalTime ~= "0:00" and state.progress > 0 then
-        local currentW = barWidth * state.progress
-        canvas:setLinearGradient(startX, barY, startX + currentW, barY, "#00FFFFFF", "#FFFFFFFF")
-        canvas:drawRoundRect(startX, barY, startX + currentW, barY + 4, 2)
-        canvas:setColor("#FFFFFF") 
-    end
-
-    -- 5. 底部信息 (只显示歌手，防止太挤)
-    canvas:setTextSize(30)
-    canvas:setColor("#666666")
-    canvas:setTextAlign(1)
-    canvas:drawText(state.artist, cx, h - 40)
 end
         """.trimIndent()
     }
+
 }

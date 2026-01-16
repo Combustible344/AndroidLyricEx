@@ -513,53 +513,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-//    // --- Visualizer 频谱逻辑 (核心修改) ---
-//
-//    // 激活频谱
-//    private fun activateVisualizer(sessionId: Int) {
-//        // 1. 检查权限
-//        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-//            Log.w("Visualizer", "没有录音权限，无法启动频谱")
-//            return
-//        }
-//
-//        try {
-//            // 2. 释放旧的
-//            releaseVisualizer()
-//
-//            // 3. 创建新的
-//            visualizer = Visualizer(sessionId).apply {
-//                // 设置捕获大小 (取范围的上限)
-//                val range = Visualizer.getCaptureSizeRange()
-//                val size = range[1].coerceAtMost(1024) // 限制最大 1024 足够了
-//                captureSize = size
-//
-//                setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
-//                    override fun onWaveFormDataCapture(v: Visualizer?, waveform: ByteArray?, samplingRate: Int) {
-//                        // 不需要波形
-//                    }
-//
-//                    override fun onFftDataCapture(v: Visualizer?, fft: ByteArray?, samplingRate: Int) {
-//                        // ★★★ 写入旁路缓存，不走 State ★★★
-//                        AudioVisualizerData.rawFft = fft
-//                    }
-//                }, Visualizer.getMaxCaptureRate() / 2, false, true) // 仅开启 FFT
-//
-//                enabled = true
-//            }
-//            Log.d("Visualizer", "启动成功 SessionID: $sessionId")
-//        } catch (e: Exception) {
-//            Log.e("Visualizer", "初始化失败", e)
-//        }
-//    }
-//
-//    private fun releaseVisualizer() {
-//        visualizer?.enabled = false
-//        visualizer?.release()
-//        visualizer = null
-//        AudioVisualizerData.rawFft = null
-//    }
-
     // --- Player 监听器 ---
 
     @OptIn(UnstableApi::class)
@@ -569,16 +522,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 _uiState.update { it.copy(isPlaying = isPlaying) }
                 if (!isPlaying) saveCurrentState()
 
-                // 暂停时关闭频谱省电
-                //visualizer?.enabled = isPlaying
-            }
 
-            // ★★★ 监听 AudioSessionId 以启动 Visualizer ★★★
-//            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-//                if (audioSessionId != androidx.media3.common.C.AUDIO_SESSION_ID_UNSET) {
-//                    activateVisualizer(audioSessionId)
-//                }
-//            }
+            }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 mediaItem?.let { item ->
