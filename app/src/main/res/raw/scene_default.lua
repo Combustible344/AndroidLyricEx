@@ -1,11 +1,13 @@
 -- [[ Lyric Scene · 微光 (Stardust) ]]
--- 脚本模式 (定义 onDraw): 简约黑底 + 逐字卡拉OK +
--- 背景微尘缓慢漂移 (正弦往返 + 呼吸明灭) + 底部进度线光点
+-- 脚本模式 (定义 onDraw): 以横屏坐标系整体绘制 (全体旋转 90°),
+-- 歌词一行可容纳更多文字, 不会溢出; 手机横放即为正向观看。
+-- 简约黑底 + 逐字卡拉OK + 背景微尘缓慢漂移 (正弦往返 + 呼吸明灭)
+-- + 底部进度线光点
 --
 -- 数值可调参数集中在 CONFIG:
---   fontSizeRatio    歌词字号 (屏高比例)
+--   fontSizeRatio    歌词字号 (横屏短边比例)
 --   particleCount    背景微尘数量 (18 个已很淡, 性能可忽略)
---   progressLineRatio 底部进度线宽度 (屏宽比例)
+--   progressLineRatio 底部进度线宽度 (横屏宽度比例)
 
 local CONFIG = {
     font = "SourceHanSansCN-Normal.ttf",
@@ -20,13 +22,21 @@ local CONFIG = {
 local font = tools.loadFont(CONFIG.font)
 
 function onDraw(state, env)
-    local w, h = env.width, env.height
+    local screenW, screenH = env.width, env.height
+
+    -- ============ 全体旋转 90°: 以横屏坐标系绘制 ============
+    -- 旋转后 w = 屏高 (长边), h = 屏宽 (短边), 布局按横屏设计
+    canvas:save()
+    canvas:translate(screenW, 0)
+    canvas:rotate(90)
+
+    local w, h = screenH, screenW
     local t = env.systemTime
     canvas:drawColor("#000000")
     if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
 
     -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
-    -- 以短边为幅度基准, 竖屏/横屏都均匀分布在中部带 (避免竖屏下纵向拉太长)
+    -- 以短边为幅度基准, 均匀分布在中部带
     local s = math.min(w, h)
     canvas:setColor("#FFFFFF")
     for i = 1, CONFIG.particleCount do
@@ -69,6 +79,7 @@ function onDraw(state, env)
         canvas:restore()
         canvas:setTextAlign(0)
         canvas:setAlpha(255)
+        canvas:restore() -- 还原旋转坐标系
         return
     end
 
@@ -152,4 +163,6 @@ function onDraw(state, env)
     canvas:drawCircle(endX, lineY + 1, 4, "#FFFFFF")
     canvas:clearShadow()
     canvas:setAlpha(255)
+
+    canvas:restore() -- 还原旋转坐标系
 end
