@@ -556,17 +556,17 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
 
+            // 模式只允许两种 (随机/单曲循环), UI 状态是唯一权威:
+            // 系统通知栏的 shuffle/重复按钮改动会触发这两个回调,
+            // 这里把播放器强制纠正回当前选定的模式, 杜绝隐藏的"顺序播放"状态
             override fun onRepeatModeChanged(r: Int) { syncMode() }
             override fun onShuffleModeEnabledChanged(s: Boolean) { syncMode() }
         })
     }
 
+    /** 把 UI 选定的模式推送到播放器 (而不是从播放器反推) */
     private fun syncMode() {
-        mediaController?.let {
-            val mode =
-                if (it.repeatMode == Player.REPEAT_MODE_ONE) PlayMode.LoopOne else PlayMode.Shuffle
-            _uiState.update { s -> s.copy(playMode = mode) }
-        }
+        mediaController?.let { applyPlayModeToPlayer(it, _uiState.value.playMode) }
     }
 
     private fun startProgressUpdateLoop() {

@@ -2,6 +2,11 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-08-04 — 播放模式固定为两种 (随机 / 单曲循环)
+
+- `syncMode()` 由"从播放器反推状态"改为"把 UI 选定的模式推送到播放器"——UI 状态成为唯一权威, 系统通知栏的 shuffle/重复按钮改动会被强制纠正, 杜绝隐藏的"顺序播放"第三状态
+- 枚举本身维持两种: `PlayMode.Shuffle` (REPEAT_MODE_ALL + shuffle) / `PlayMode.LoopOne` (REPEAT_MODE_ONE)
+
 ## 2026-08-04 — 屏保渲染性能优化
 
 - **场景构建移出主线程**: `loadScene()` 整体在 IO 线程执行 (LuaJ 构建 + 字体文件 IO), 完成后再切回主线程更新渲染器; `SceneBuilder.build` 加 `@Synchronized` 防 LuaJ globals 并发竞争; `LyricSceneRenderer.setScene` 改为先预编译表达式再发布场景引用, IO 线程写入与主线程渲染零竞争
