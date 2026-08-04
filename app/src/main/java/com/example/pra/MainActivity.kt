@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.FileObserver
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -60,7 +61,7 @@ class MainActivity : ComponentActivity() {
     private val scriptRenderer = LuaScriptRenderer(scriptEngine)
     private var activeRenderer: LyricCanvasRenderer by mutableStateOf(sceneRenderer)
     private lateinit var sceneFile: File
-    private var lastSceneModifiedAt: Long = 0L
+    private var sceneObserver: FileObserver? = null
     private val sceneWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -202,18 +203,27 @@ class MainActivity : ComponentActivity() {
 
         loadScene()
 
-        // 文件变化监听 (轮询修改时间, 3 秒) → 改文件即生效
-        lastSceneModifiedAt = sceneFile.lastModified()
-        sceneWatchScope.launch {
-            while (true) {
-                delay(3.seconds)
-                val modifiedAt = sceneFile.lastModified()
-                if (modifiedAt != lastSceneModifiedAt) {
-                    lastSceneModifiedAt = modifiedAt
+        // 文件变化监听: FileObserver 事件驱动, 只有文件被修改 (CLOSE_WRITE) 才回调,
+        // 替代原先每 3 秒轮询 mtime 的方式
+        startSceneWatch()
+    }
+
+    /** 监听 scene.lua 的写入事件, 修改即重载 */
+    private fun startSceneWatch() {
+        stopSceneWatch()
+        val dir = sceneFile.parentFile ?: return
+        sceneObserver = object : FileObserver(dir.absolutePath, FileObserver.CLOSE_WRITE) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == sceneFile.name) {
                     loadScene()
                 }
             }
-        }
+        }.also { it.startWatching() }
+    }
+
+    private fun stopSceneWatch() {
+        sceneObserver?.stopWatching()
+        sceneObserver = null
     }
 
     /** 读取内置默认场景脚本 (res/raw/scene_default.lua) */
@@ -272,6 +282,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        stopSceneWatch()
         sceneWatchScope.cancel()
         super.onDestroy()
     }
