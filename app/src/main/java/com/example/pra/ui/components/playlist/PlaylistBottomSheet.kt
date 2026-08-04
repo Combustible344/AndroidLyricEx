@@ -12,7 +12,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -43,6 +45,8 @@ fun PlaylistBottomSheet(
     onAddFileClick: () -> Unit,
     onBindLyricClick: (Audio) -> Unit,
     onRemoveClick: (Audio) -> Unit,
+    onOpenLibraryClick: () -> Unit = {},
+    onOpenSettingsClick: () -> Unit = {},
     onUserActivity: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -99,6 +103,17 @@ fun PlaylistBottomSheet(
                     FrostedCapsuleButton(Icons.Default.Refresh, "扫描", onScanClick)
                     FrostedCapsuleButton(Icons.Default.Add, "添加", onAddFileClick)
                 }
+            }
+
+            // --- 管理入口: 全屏管理页 (音乐库 / 设置) ---
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                FrostedCapsuleButton(Icons.Default.List, "歌曲管理", onOpenLibraryClick)
+                FrostedCapsuleButton(Icons.Default.Settings, "设置", onOpenSettingsClick)
             }
 
             // 分割线移除，用 padding 代替，更现代
