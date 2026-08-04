@@ -165,7 +165,11 @@ class MainActivity : ComponentActivity() {
                 ) {
                     PlayerScreen(
                         onUserActivity = { interactionSignal = System.currentTimeMillis() },
-                        onPlaylistVisibilityChange = { isOpen -> isPlaylistOpen = isOpen },
+                        onPlaylistVisibilityChange = { isOpen ->
+                            isPlaylistOpen = isOpen
+                            // sheet 拖拽可能触发瞬时系统栏, 立即收回, 保持沉浸式
+                            hideSystemBars()
+                        },
                         backgroundActive = !overlayVisible
                     )
                 }

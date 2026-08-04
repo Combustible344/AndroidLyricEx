@@ -2,6 +2,11 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-08-04 — 修复歌曲 sheet 弹出时系统栏出现导致布局被挤压
+
+- 根因: PlayerScreen 使用 `systemBarsPadding()`, 沉浸式模式下拖拽 sheet 触发瞬时系统栏 (transient bars) → insets 变化 → 主布局被挤压跳动
+- 修复: 移除 `systemBarsPadding()` (沉浸式全屏设计不依赖系统栏 insets); sheet 开合时强制 `hideSystemBars()` 收回瞬时系统栏
+
 ## 2026-08-04 — Lua 脚本模式回归: 命令缓冲架构 (任意效果 + 可控性能)
 
 - **双模式自动检测**: scene.lua 定义 `onDraw` 即启用 Lua 每帧脚本模式, 否则用声明式场景 (原生渲染)
