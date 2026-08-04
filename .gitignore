@@ -16,3 +16,8 @@ local.properties
 keystore.properties
 app/release/
 app/src/main/key
+.idea/.name
+.idea/appInsightsSettings.xml
+.idea/markdown.xml
+.idea/planningMode.xml
+.idea/studiobot.xml
