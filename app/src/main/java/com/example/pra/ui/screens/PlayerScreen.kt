@@ -172,12 +172,6 @@ fun PlayerScreen(
                 bindLyricLauncher.launch(arrayOf("*/*"))
             },
             onRemoveClick = { viewModel.removeSong(it) },
-            onOpenLibraryClick = {
-                context.startActivity(Intent(context, MusicLibraryActivity::class.java))
-            },
-            onOpenSettingsClick = {
-                context.startActivity(Intent(context, SettingsActivity::class.java))
-            },
             onUserActivity = onUserActivity
         )
     }
