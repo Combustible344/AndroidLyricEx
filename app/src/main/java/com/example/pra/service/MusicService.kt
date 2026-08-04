@@ -48,21 +48,20 @@ class MusicService : MediaSessionService() {
     // 当 App 被划掉（任务移除）时，停止服务
     override fun onTaskRemoved(rootIntent: Intent?) {
         val player = player
-        // 如果没有正在播放，就停止服务；如果正在播放，继续在后台运行
-        if (player != null && !player.playWhenReady) {
+        // 用 isPlaying 判断真实播放状态 (playWhenReady 在加载/缓冲时也可能为 true)
+        if (player != null && !player.isPlaying) {
             stopSelf()
         }
     }
 
-    // 销毁时释放资源，防止内存泄漏
+    // 销毁时释放资源，防止内存泄漏 (player 只 release 一次)
     override fun onDestroy() {
-        mediaSession?.run {
-            player.release()
-            release()
-            mediaSession = null
-        }
-        player?.release()
+        val session = mediaSession
+        val p = player
+        mediaSession = null
         player = null
+        session?.release()
+        p?.release()
         super.onDestroy()
     }
 }

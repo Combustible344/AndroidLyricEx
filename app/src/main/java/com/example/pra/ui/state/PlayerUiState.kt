@@ -19,6 +19,7 @@ data class PlayerUiState(
     val progress: Float = 0f,
     val currentTime: String = "0:00",
     val totalTime: String = "0:00",
+    val durationMs: Long = 0L,           // 当前曲目总时长 (毫秒), 供渲染层做帧内进度推演
     val playlist: List<Audio> = emptyList(),
     val currentSongId: Long = -1L,
     val playMode: PlayMode = PlayMode.Shuffle,

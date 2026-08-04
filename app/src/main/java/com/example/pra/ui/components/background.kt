@@ -13,27 +13,41 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
+/**
+ * 氛围流体背景。
+ * @param active 为 false 时冻结动画 (屏保全屏覆盖时用于省电,
+ *        不创建无限动画, 背景不会每帧重绘/重算模糊)
+ */
 @Composable
 fun AtmosphericFluidBackground(
+    active: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "AtmosphericFluid")
+    // 动画值: active 时由 infiniteTransition 驱动, 否则固定为 0 (零开销)
+    val moveAnim1: Float
+    val moveAnim2: Float
+    if (active) {
+        val infiniteTransition = rememberInfiniteTransition(label = "AtmosphericFluid")
 
-    // 1. 减慢动画速度：高级感通常伴随着缓慢、难以察觉的流动
-    // 使用更长的周期 (20秒/25秒) 模拟“呼吸”感，而不是“移动”
-    val moveAnim1 by infiniteTransition.animateFloat(
-        initialValue = -60f, targetValue = 60f, // 减小移动幅度，保持画面稳重
-        animationSpec = infiniteRepeatable(tween(20000, easing = LinearOutSlowInEasing), RepeatMode.Reverse),
-        label = "move1"
-    )
-    val moveAnim2 by infiniteTransition.animateFloat(
-        initialValue = 80f, targetValue = -80f,
-        animationSpec = infiniteRepeatable(tween(25000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-        label = "move2"
-    )
+        // 1. 减慢动画速度：高级感通常伴随着缓慢、难以察觉的流动
+        val a1 by infiniteTransition.animateFloat(
+            initialValue = -60f, targetValue = 60f,
+            animationSpec = infiniteRepeatable(tween(20000, easing = LinearOutSlowInEasing), RepeatMode.Reverse),
+            label = "move1"
+        )
+        val a2 by infiniteTransition.animateFloat(
+            initialValue = 80f, targetValue = -80f,
+            animationSpec = infiniteRepeatable(tween(25000, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "move2"
+        )
+        moveAnim1 = a1
+        moveAnim2 = a2
+    } else {
+        moveAnim1 = 0f
+        moveAnim2 = 0f
+    }
 
     // 2. 提取图片中的核心色板：深灰蓝、岩板灰、冷调白
-    // 不再使用高饱和度的 Cyan/Purple
     val baseColor = Color(0xFF2C353F)     // 基底：深岩石灰 (对应图片最暗部)
     val highlightColor = Color(0xFF5D7385) // 高光：较亮的灰蓝 (对应光源)
     val midToneColor = Color(0xFF435360)   // 中间调：过渡灰

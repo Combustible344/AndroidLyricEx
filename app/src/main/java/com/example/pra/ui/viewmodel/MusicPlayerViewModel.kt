@@ -29,6 +29,7 @@ import com.example.pra.utils.LyricParser
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -144,6 +145,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             isPlaying = false,
                             currentTime = formatTime(prefs.currentPosition),
                             totalTime = formatTime(song.duration),
+                            durationMs = song.duration,
                             progress = if (song.duration > 0) prefs.currentPosition.toFloat() / song.duration else 0f
                         )
                     }
@@ -173,13 +175,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             )
 
             if (isDying) {
-                try {
-                    kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-                        repository.savePlayerPrefs(prefs)
-                        Log.d("Restore", "退出保存(Blocking): $prefs")
-                    }
-                } catch (e: Exception) {
-                    Log.e("Restore", "退出保存失败", e)
+                // onCleared 时 viewModelScope 即将取消, 用 NonCancellable 保证写盘完成,
+                // 但不再阻塞主线程 (原实现 runBlocking 有 ANR 风险)
+                viewModelScope.launch(NonCancellable + Dispatchers.IO) {
+                    repository.savePlayerPrefs(prefs)
+                    Log.d("Restore", "退出保存(后台): $prefs")
                 }
             } else {
                 viewModelScope.launch(Dispatchers.IO) {
@@ -421,7 +421,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     fun seekTo(p: Float) {
         mediaController?.let {
-            val ms = (it.duration * p).toLong()
+            val dur = it.duration
+            // C.TIME_UNSET 或 0 时没有有效时长, 放弃 seek (避免溢出)
+            if (dur <= 0 || dur == androidx.media3.common.C.TIME_UNSET) return@let
+            val ms = (dur * p).toLong()
             it.seekTo(ms)
             _uiState.update { s -> s.copy(progress = p, currentTime = formatTime(ms)) }
             updateCurrentLyricLine(ms)
@@ -534,7 +537,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             artistName = meta.artist.toString(),
                             coverUri = meta.artworkUri,
                             currentSongId = id,
-                            totalTime = formatTime(mediaController?.duration ?: 0L)
+                            totalTime = formatTime(mediaController?.duration ?: 0L),
+                            durationMs = mediaController?.duration ?: 0L
                         )
                     }
                     saveCurrentState()
@@ -545,7 +549,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
             override fun onPlaybackStateChanged(s: Int) {
                 if (s == Player.STATE_READY) _uiState.update {
-                    it.copy(totalTime = formatTime(mediaController?.duration ?: 0L))
+                    it.copy(
+                        totalTime = formatTime(mediaController?.duration ?: 0L),
+                        durationMs = mediaController?.duration ?: 0L
+                    )
                 }
             }
 
@@ -573,7 +580,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             s.copy(
                                 progress = pos.toFloat() / dur,
                                 currentTime = formatTime(pos),
-                                totalTime = formatTime(dur)
+                                totalTime = formatTime(dur),
+                                durationMs = dur
                             )
                         }
                         updateCurrentLyricLine(pos)

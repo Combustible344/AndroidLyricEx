@@ -40,7 +40,8 @@ import com.example.pra.ui.viewmodel.MusicPlayerViewModel
 fun PlayerScreen(
     viewModel: MusicPlayerViewModel = viewModel(),
     onUserActivity: () -> Unit = {},
-    onPlaylistVisibilityChange: (Boolean) -> Unit = {}
+    onPlaylistVisibilityChange: (Boolean) -> Unit = {},
+    backgroundActive: Boolean = true
 ) {
     val state by viewModel.uiState.collectAsState()
     var showPlaylist by remember { mutableStateOf(false) }
@@ -115,7 +116,7 @@ fun PlayerScreen(
         onPlaylistVisibilityChange(showPlaylist)
     }
 
-    AtmosphericFluidBackground {
+    AtmosphericFluidBackground(active = backgroundActive) {
         Column(
             modifier = Modifier
                 .fillMaxSize()

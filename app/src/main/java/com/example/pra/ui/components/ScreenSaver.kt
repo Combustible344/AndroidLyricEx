@@ -23,6 +23,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 // ==========================================
 // 1. 定义环境与接口
@@ -37,13 +38,17 @@ data class ScreenSaverEnvironment(
 
 data class ScreenSaverConfig(
     val timeoutMillis: Long = 5000,
-    val unlockTapCount: Int = 5, // 改为1次点击唤醒通常体验更好，配合动画很舒服，你可以改回5
+    val unlockTapCount: Int = 5,
     val tapResetMillis: Long = 1000,
     val backgroundColor: Color = Color.Black
 )
 
+/**
+ * 渲染器: frameNanos 由 overlay 内部帧循环提供 (60fps),
+ * 只在 Canvas 绘制阶段读取, 不会触发 UI 树重组
+ */
 fun interface ScreenSaverRenderer<T> {
-    fun onDraw(scope: DrawScope, env: ScreenSaverEnvironment, data: T)
+    fun onDraw(scope: DrawScope, env: ScreenSaverEnvironment, data: T, frameNanos: Long)
 }
 
 // ==========================================
@@ -57,6 +62,7 @@ fun <T> IdleScreenSaver(
     config: ScreenSaverConfig = ScreenSaverConfig(),
     externalInteractionSignal: Long = 0L,
     isEnabled: Boolean = true,
+    onOverlayVisibilityChange: (Boolean) -> Unit = {},
     content: @Composable () -> Unit
 ) {
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -73,7 +79,9 @@ fun <T> IdleScreenSaver(
     // 2. 超时检测
     LaunchedEffect(lastInteractionTime, isOverlayVisible, config.timeoutMillis, isEnabled) {
         if (!isEnabled) {
-            isOverlayVisible = false
+            if (isOverlayVisible) {
+                isOverlayVisible = false
+            }
             return@LaunchedEffect
         }
 
@@ -81,12 +89,17 @@ fun <T> IdleScreenSaver(
             val timeSinceLastInteraction = System.currentTimeMillis() - lastInteractionTime
             val remainingTime = config.timeoutMillis - timeSinceLastInteraction
             if (remainingTime > 0) {
-                delay(remainingTime)
+                delay(remainingTime.milliseconds)
             }
             if (isEnabled) {
                 isOverlayVisible = true
             }
         }
+    }
+
+    // 3. 可见性通知 (用于冻结背景动画等)
+    LaunchedEffect(isOverlayVisible) {
+        onOverlayVisibilityChange(isOverlayVisible)
     }
 
     Box(
@@ -134,6 +147,15 @@ private fun <T> ScreenSaverOverlay(
     var tapCount by remember { mutableIntStateOf(0) }
     var lastTapTime by remember { mutableLongStateOf(0L) }
 
+    // ★★★ 帧驱动: 只更新本地帧时间, 仅在 Canvas 绘制阶段读取
+    // → 只触发本 Canvas 重绘, PlayerScreen 等兄弟节点不再每帧重组
+    var frameNanos by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos { frameNanos = it }
+        }
+    }
+
     Canvas(
         modifier = Modifier
             .fillMaxSize()
@@ -161,7 +183,7 @@ private fun <T> ScreenSaverOverlay(
             center = center,
             config = config
         )
-        renderer.onDraw(this, env, data)
+        renderer.onDraw(this, env, data, frameNanos)
     }
 }
 
@@ -173,7 +195,7 @@ object ScreenSaverRenderers {
     fun createSimpleTextRenderer(
         textSize: Float = 64f,
         textColor: Int = android.graphics.Color.WHITE
-    ) = ScreenSaverRenderer<String> { scope, env, text ->
+    ) = ScreenSaverRenderer<String> { scope, env, text, _ ->
         if (text.isNotEmpty()) {
             scope.drawIntoCanvas { canvas ->
                 val paint = Paint().apply {

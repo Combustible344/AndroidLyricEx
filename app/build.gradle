@@ -4,13 +4,22 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// 签名配置从本地 keystore.properties 读取 (不进入版本库)
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file('keystore.properties')
+if (keystoreFile.exists()) {
+    keystoreFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     signingConfigs {
         release_config {
-            storeFile file('C:\\Users\\27576\\Desktop\\NSpace\\Android\\Pra\\app\\src\\main\\key')
-            storePassword 'wy666666'
-            keyAlias 'key0'
-            keyPassword 'wy666666'
+            if (keystoreProps.getProperty('storeFile') != null) {
+                storeFile rootProject.file(keystoreProps.getProperty('storeFile'))
+                storePassword keystoreProps.getProperty('storePassword')
+                keyAlias keystoreProps.getProperty('keyAlias')
+                keyPassword keystoreProps.getProperty('keyPassword')
+            }
         }
     }
     namespace 'com.example.pra'
@@ -56,8 +65,6 @@ dependencies {
     implementation libs.androidx.compose.ui.graphics
     implementation libs.androidx.compose.ui.tooling.preview
     implementation libs.androidx.compose.material3
-    implementation libs.volley
-    implementation libs.generativeai
     implementation libs.androidx.ui.graphics
     testImplementation libs.junit
     androidTestImplementation libs.androidx.junit
