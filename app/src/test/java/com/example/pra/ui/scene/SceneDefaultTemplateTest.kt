@@ -42,12 +42,14 @@ function onDraw(state, env)
     if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
 
     -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
+    -- 以短边为幅度基准, 竖屏/横屏都均匀分布在中部带 (避免竖屏下纵向拉太长)
+    local s = math.min(w, h)
     canvas:setColor("#FFFFFF")
     for i = 1, CONFIG.particleCount do
         local seed = i * 7.31
         local speed = 1 + (i % 4) * 0.25
-        local px = w * 0.5 + math.sin(t * 0.00004 * speed + seed) * w * 0.44
-        local py = h * 0.25 + (math.sin(t * 0.00007 * speed + seed * 1.7) * 0.5 + 0.5) * h * 0.55
+        local px = w * 0.5 + math.sin(t * 0.00004 * speed + seed) * s * 0.48
+        local py = h * 0.38 + (math.sin(t * 0.00007 * speed + seed * 1.7) * 0.5 + 0.5) * s * 0.55
         local pr = 1 + (i % 3)
         local pa = 10 + (math.sin(t * 0.0001 * speed + seed * 2.3) * 0.5 + 0.5) * 12
         canvas:setAlpha(math.floor(pa))
