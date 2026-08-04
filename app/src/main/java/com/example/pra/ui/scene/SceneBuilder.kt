@@ -28,6 +28,8 @@ class SceneBuilder {
 
     private val globals: Globals = JsePlatform.standardGlobals()
 
+    /** LuaJ globals 非线程安全, 构建串行化 */
+    @Synchronized
     fun build(scriptContent: String): LyricScene {
         val state = SceneBuildState()
         globals.set("scene", CoerceJavaToLua.coerce(SceneFacade(state)))

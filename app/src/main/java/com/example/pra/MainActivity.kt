@@ -102,12 +102,17 @@ class MainActivity : ComponentActivity() {
                     syncAtNs = System.nanoTime()
                 }
 
+                // 3. 帧率自适应: 播放中或占位呼吸(无歌词)时需要连续动画 → 60fps;
+                //    暂停且有歌词时画面静止 → 只画一帧, 帧循环休眠省电
+                val frameRateActive = uiState.isPlaying || uiState.currentLyricLine == null
+
                 IdleScreenSaver(
                     data = ScreenSaverAnimState(timeString),
                     config = ScreenSaverConfig(backgroundColor = Color.Black),
                     externalInteractionSignal = interactionSignal,
                     isEnabled = !isPlaylistOpen,
                     onOverlayVisibilityChange = { overlayVisible = it },
+                    frameRateActive = frameRateActive,
                     renderer = ScreenSaverRenderer { scope, env, _, frameNanos ->
                         // 组合期收集的最新状态 + 帧内推演, 只失效本 Canvas 的绘制
                         val durationMs = uiState.durationMs.coerceAtLeast(1L)
@@ -123,7 +128,7 @@ class MainActivity : ComponentActivity() {
                                 positionMs = positionMs,
                                 width = env.size.width,
                                 height = env.size.height,
-                                systemTimeMs = System.currentTimeMillis()
+                                systemTimeMs = frameNanos / 1_000_000L
                             )
                         }
                     }
@@ -171,7 +176,7 @@ class MainActivity : ComponentActivity() {
                 val modifiedAt = sceneFile.lastModified()
                 if (modifiedAt != lastSceneModifiedAt) {
                     lastSceneModifiedAt = modifiedAt
-                    withContext(Dispatchers.Main) { loadScene() }
+                    loadScene()
                 }
             }
         }
@@ -186,26 +191,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 场景构建在 IO 线程 (LuaJ 解析 + 字体文件 IO), 完成后再切回主线程更新渲染器 */
     private fun loadScene() {
-        try {
-            val script = sceneFile.readText()
-            val scene = sceneBuilder.build(script)
-            sceneRenderer.setScene(scene)
-            Toast.makeText(this, "场景已加载", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            // 脚本错误 → 记录原因 + 回退默认场景
-            val message = e.message ?: e.toString()
-            writeSceneErrorLog(message)
-            try {
-                val scene = sceneBuilder.build(readDefaultSceneScript())
-                sceneRenderer.setScene(scene)
-            } catch (_: Exception) {
+        sceneWatchScope.launch {
+            val defaultScript = readDefaultSceneScript()
+            var usedFallback = false
+            val scene = try {
+                sceneBuilder.build(sceneFile.readText())
+            } catch (e: Exception) {
+                // 脚本错误 → 记录原因 + 回退默认场景
+                writeSceneErrorLog(e.message ?: e.toString())
+                usedFallback = true
+                sceneBuilder.build(defaultScript)
             }
-            Toast.makeText(
-                this,
-                "场景脚本错误: ${message.take(80)}",
-                Toast.LENGTH_LONG
-            ).show()
+            withContext(Dispatchers.Main) {
+                sceneRenderer.setScene(scene)
+                Toast.makeText(
+                    this@MainActivity,
+                    if (usedFallback) "场景脚本错误，已回退默认" else "场景已加载",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 

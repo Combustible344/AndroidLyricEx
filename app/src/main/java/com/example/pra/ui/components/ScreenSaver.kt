@@ -63,6 +63,7 @@ fun <T> IdleScreenSaver(
     externalInteractionSignal: Long = 0L,
     isEnabled: Boolean = true,
     onOverlayVisibilityChange: (Boolean) -> Unit = {},
+    frameRateActive: Boolean = true,
     content: @Composable () -> Unit
 ) {
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -127,6 +128,7 @@ fun <T> IdleScreenSaver(
                 renderer = renderer,
                 config = config,
                 androidContext = currentContext,
+                frameRateActive = frameRateActive,
                 onUnlock = {
                     isOverlayVisible = false
                     lastInteractionTime = System.currentTimeMillis()
@@ -142,16 +144,21 @@ private fun <T> ScreenSaverOverlay(
     renderer: ScreenSaverRenderer<T>,
     config: ScreenSaverConfig,
     androidContext: Context,
+    frameRateActive: Boolean,
     onUnlock: () -> Unit
 ) {
     var tapCount by remember { mutableIntStateOf(0) }
     var lastTapTime by remember { mutableLongStateOf(0L) }
 
-    // ★★★ 帧驱动: 只更新本地帧时间, 仅在 Canvas 绘制阶段读取
-    // → 只触发本 Canvas 重绘, PlayerScreen 等兄弟节点不再每帧重组
+    // ★★★ 自适应帧驱动: 只在 Canvas 绘制阶段读取 frameNanos, 不触发 UI 树重组。
+    // frameRateActive=false (画面静止) 时只渲染一帧, 帧循环休眠, 省电
     var frameNanos by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
-        while (true) {
+    LaunchedEffect(frameRateActive) {
+        if (frameRateActive) {
+            while (true) {
+                withFrameNanos { frameNanos = it }
+            }
+        } else {
             withFrameNanos { frameNanos = it }
         }
     }

@@ -40,11 +40,11 @@ class LyricSceneRenderer(private val context: Context) {
     // ==================== 场景 ====================
 
     fun setScene(scene: LyricScene) {
-        this.scene = scene
-        currentTypeface = scene.fontPath?.let { path ->
+        // 先预编译全部表达式并解析字体, 最后才发布 scene 引用
+        // (setScene 可能在 IO 线程调用, 渲染在主线程读, 引用发布保证原子性)
+        val typeface = scene.fontPath?.let { path ->
             typefaceCache.getOrPut(path) { loadTypeface(path) }
         }
-        // 预编译全部表达式, 首次渲染零解析开销
         scene.lyric?.fontSize?.let { vars.eval(it) }
         scene.lyric?.y?.let { vars.eval(it) }
         scene.placeholder?.fontSize?.let { vars.eval(it) }
@@ -64,6 +64,8 @@ class LyricSceneRenderer(private val context: Context) {
                 }
             }
         }
+        this.scene = scene
+        currentTypeface = typeface
         invalidateLayout()
     }
 
@@ -165,18 +167,26 @@ class LyricSceneRenderer(private val context: Context) {
 
         paint.alpha = (255 * alpha).toInt().coerceIn(0, 255)
 
+        // 颜色缓存: 同一帧内底色/高亮连续相同颜色时跳过重复设置
+        var lastColor = -1
         for ((gi, group) in layout.groups.withIndex()) {
             val groupY = startY + gi * lineHeight
             var x = width / 2f - group.width / 2f
             for (unit in group.units) {
                 // 底色
-                paint.color = lyric.baseColor
+                if (lyric.baseColor != lastColor) {
+                    paint.color = lyric.baseColor
+                    lastColor = lyric.baseColor
+                }
                 canvas.drawText(unit.text, x, groupY, paint)
 
                 // 高亮 (按字进度裁剪)
                 val progress = fillProgress(unit, positionMs)
                 if (progress > 0f) {
-                    paint.color = lyric.highlightColor
+                    if (lyric.highlightColor != lastColor) {
+                        paint.color = lyric.highlightColor
+                        lastColor = lyric.highlightColor
+                    }
                     if (lyric.shadowColor != 0) {
                         paint.setShadowLayer(fontSize * 0.2f, 0f, 0f, lyric.shadowColor)
                     }
