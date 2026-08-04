@@ -1,54 +1,153 @@
--- [[ Lyric Scene V1: 高性能原生渲染模板 ]]
+-- [[ Lyric Scene · 微光 (Stardust) ]]
+-- 脚本模式 (定义 onDraw): 简约黑底 + 逐字卡拉OK +
+-- 背景微尘缓慢漂移 (正弦往返 + 呼吸明灭) + 底部进度线光点
 --
--- 两种模式 (自动检测, 按本文件是否定义 onDraw 决定):
---
--- [模式 A] 声明式场景 (默认, 本模板): 性能最优
---   脚本只在加载时执行一次, 产出场景描述;
---   每帧热路径由原生 Kotlin 渲染器执行。
---   数值字段可写常量或表达式 (每帧求值):
---     变量: t(行进度) pos(播放位置ms) time(系统时间ms) dur(行时长ms)
---           playing w h alpha(进出场透明度) offsetY(进出场偏移px)
---     函数: sin cos tan sqrt abs floor ceil frac min max pow
---           clamp lerp map smoothstep
---
--- [模式 B] Lua 每帧脚本 (定义 onDraw 即自动启用): 任意效果
---   每帧执行完整 Lua 逻辑, 绘制命令由原生批量回放, 性能仍然可控。
---   可用 API:
---     canvas: setColor setAlpha setTextSize setTextAlign setStyle
---             setShadow setLinearGradient setTypeface setStrokeWidth
---             drawText drawRect drawCircle drawLine drawArc drawColor
---             save restore translate scale rotate clipRect
---             measureText measureTextHeight getTextCenterOffset
---             beginPath moveTo lineTo quadTo closePath drawPath
---             drawKaraokeLine
---     anim:  lerp map clamp sineWave pulse easeInQuad easeOutQuad
---            easeInOutSine easeOutBack
---     tools: toChars loadFont
---     state: title artist currentTime totalTime isPlaying position
---            duration progress volume playMode isLiked likedCount
---            currentLyricIndex currentWordIndex lyric lineStart lineEnd
---            lineProgress
---     env:   time systemTime width height isPortrait anim
---     global_lyrics: 歌词表 (1 起始, 含 startTime/endTime/text/words[st,et])
+-- 数值可调参数集中在 CONFIG:
+--   fontSizeRatio    歌词字号 (屏高比例)
+--   particleCount    背景微尘数量 (18 个已很淡, 性能可忽略)
+--   progressLineRatio 底部进度线宽度 (屏宽比例)
 
-local fontName = "SourceHanSansCN-Normal.ttf"
-
-scene:setFont(fontName, 90)
-scene:backgroundColor("#000000")
-
-scene:lyric {
-    fontSize = 90,
-    baseColor = "#888888",
-    highlightColor = "#FFFFFF",
-    -- shadow = "#FF3366",   -- 需要辉光时取消注释 (每帧对高亮字生成阴影, 有性能开销)
-    lineHeight = 1.5,
-    maxWidth = 0.85,
-    y = "h / 2 + offsetY",
-    fillByWord = true,
+local CONFIG = {
+    font = "SourceHanSansCN-Normal.ttf",
+    fontSizeRatio = 0.075,
+    titleSizeRatio = 0.03,
+    baseColor = "#5A5A5A",
+    activeColor = "#FFFFFF",
+    particleCount = 18,
+    progressLineRatio = 0.8,
 }
 
-scene:placeholder {
-    fontSize = 60,
-    color = "#FFFFFF",
-    breath = true,
-}
+local font = tools.loadFont(CONFIG.font)
+
+function onDraw(state, env)
+    local w, h = env.width, env.height
+    local t = env.systemTime
+    canvas:drawColor("#000000")
+    if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
+
+    -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
+    canvas:setColor("#FFFFFF")
+    for i = 1, CONFIG.particleCount do
+        local seed = i * 7.31
+        local speed = 1 + (i % 4) * 0.25
+        local px = w * 0.5 + math.sin(t * 0.00004 * speed + seed) * w * 0.44
+        local py = h * 0.25 + (math.sin(t * 0.00007 * speed + seed * 1.7) * 0.5 + 0.5) * h * 0.55
+        local pr = 1 + (i % 3)
+        local pa = 10 + (math.sin(t * 0.0001 * speed + seed * 2.3) * 0.5 + 0.5) * 12
+        canvas:setAlpha(math.floor(pa))
+        canvas:drawCircle(px, py, pr, "#FFFFFF")
+    end
+    canvas:setAlpha(255)
+
+    -- ============ 顶部: 歌名 · 歌手 ============
+    local title = (state.title or "") .. " · " .. (state.artist or "")
+    canvas:setTextSize(h * CONFIG.titleSizeRatio)
+    canvas:setTextAlign(1)
+    canvas:setColor("#FFFFFF")
+    canvas:setAlpha(80)
+    canvas:drawText(title, w / 2, h * 0.06)
+    canvas:setTextAlign(0)
+    canvas:setAlpha(255)
+
+    local lineIdx = (state.currentLyricIndex or -1) + 1
+    local lineObj = global_lyrics and global_lyrics[lineIdx]
+    if not lineObj then
+        -- 占位: 歌名居中呼吸
+        local fontSize = h * 0.05
+        canvas:setTextSize(fontSize)
+        canvas:setTextAlign(1)
+        local scale = 1 + math.sin(t * 0.0015) * 0.02
+        canvas:save()
+        canvas:translate(w / 2, h / 2)
+        canvas:scale(scale, scale)
+        canvas:translate(-w / 2, -h / 2)
+        canvas:setColor("#FFFFFF")
+        canvas:setAlpha(200)
+        canvas:drawText(state.title, w / 2, h / 2 + canvas:getTextCenterOffset())
+        canvas:restore()
+        canvas:setTextAlign(0)
+        canvas:setAlpha(255)
+        return
+    end
+
+    local pos = state.position or 0
+    local fontSize = h * CONFIG.fontSizeRatio
+    canvas:setTextSize(fontSize)
+
+    local units = lineObj.words
+    if not units or #units == 0 then
+        units = {}
+        local chars = tools.toChars(lineObj.text)
+        for i, v in ipairs(chars) do
+            units[i] = { text = v, st = lineObj.startTime, et = lineObj.endTime }
+        end
+    end
+
+    -- 测量与居中 (超宽靠左)
+    local widths = {}
+    local totalW = 0
+    for i, u in ipairs(units) do
+        widths[i] = canvas:measureText(u.text)
+        totalW = totalW + widths[i]
+    end
+    local maxW = w * 0.85
+    local x = totalW > maxW and w * 0.05 or (w - totalW) / 2
+    local y = h / 2 + canvas:getTextCenterOffset()
+
+    -- ============ 进出场: 600ms 缓入上滑 / 缓出上移 ============
+    local alpha, dy = 255, 0
+    if pos < lineObj.startTime + 600 then
+        local k = anim:clamp((pos - lineObj.startTime) / 600, 0, 1)
+        alpha = math.floor(k * 255)
+        dy = (1 - k) * fontSize * 0.5
+    elseif pos > lineObj.endTime - 400 then
+        local k = anim:clamp((pos - (lineObj.endTime - 400)) / 400, 0, 1)
+        alpha = math.floor((1 - k) * 255)
+        dy = -k * fontSize * 0.5
+    end
+    canvas:setAlpha(alpha)
+
+    -- ============ 逐字卡拉OK ============
+    for i, u in ipairs(units) do
+        canvas:setColor(CONFIG.baseColor)
+        canvas:drawText(u.text, x, y + dy)
+
+        local prog = 0
+        if pos >= u.st then
+            if pos >= u.et then prog = 1
+            elseif u.et > u.st then prog = (pos - u.st) / (u.et - u.st)
+            else prog = 1 end
+        end
+        if prog > 0 then
+            canvas:setColor(CONFIG.activeColor)
+            canvas:save()
+            canvas:clipRect(x, y + dy - fontSize * 1.2, x + widths[i] * prog, y + dy + fontSize * 0.8)
+            canvas:drawText(u.text, x, y + dy)
+            canvas:restore()
+        end
+        x = x + widths[i]
+    end
+    canvas:setAlpha(255)
+
+    -- ============ 底部进度线 + 前端光点 ============
+    local lineW = w * CONFIG.progressLineRatio
+    local lineY = h * 0.93
+    local lineX0 = (w - lineW) / 2
+    local prog = anim:clamp(state.progress or 0, 0, 1)
+    local endX = lineX0 + lineW * prog
+
+    canvas:setColor("#FFFFFF")
+    canvas:setAlpha(25)
+    canvas:drawRect(lineX0, lineY, lineX0 + lineW, lineY + 2, "#FFFFFF")
+
+    canvas:setAlpha(255)
+    canvas:drawRect(lineX0, lineY, endX, lineY + 2, "#FFFFFF")
+
+    -- 光点: 缓慢呼吸 + 微光
+    local pulse = 0.5 + (math.sin(t * 0.004) * 0.5 + 0.5) * 0.5
+    canvas:setAlpha(150 + math.floor(pulse * 100))
+    canvas:setShadow(8, 0, 0, "#40FFFFFF")
+    canvas:drawCircle(endX, lineY + 1, 4, "#FFFFFF")
+    canvas:clearShadow()
+    canvas:setAlpha(255)
+end
