@@ -1,5 +1,6 @@
 package com.example.pra.ui.scene
 
+import android.content.Context
 import android.graphics.Color
 import org.luaj.vm2.Globals
 import org.luaj.vm2.LuaTable
@@ -30,9 +31,15 @@ data class SceneBuildResult(
     val hasOnDraw: Boolean
 )
 
-class SceneBuilder {
+class SceneBuilder(private val context: Context? = null) {
 
     private val globals: Globals = JsePlatform.standardGlobals()
+
+    init {
+        // 注入 tools (toChars/loadFont): 脚本模式脚本在顶层可能引用,
+        // 保证 hasOnDraw 检测能正确执行构建期代码
+        LuaEnv.injectTools(globals, context)
+    }
 
     /** LuaJ globals 非线程安全, 构建串行化 */
     @Synchronized

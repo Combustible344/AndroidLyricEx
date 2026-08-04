@@ -2,6 +2,16 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-08-04 — 新增 4 个息屏歌词预设主题 (利用命令缓冲绘制能力)
+
+- 新增 `ScenePresets.kt`, 内置 4 个简约脚本模式主题 (可整体替换设备上的 scene.lua 使用):
+  1. **纯白极简** — 黑底白字逐字卡拉OK + 顶部歌名 + 底部整曲进度线
+  2. **呼吸光晕** — 整行呼吸缩放 + 唱到的字柔光 (shadow 仅活动字, 每帧一次) + 背景极淡圆脉动
+  3. **滑入时间线** — 切行整行滑入 + 歌词下方圆点时间线 (已唱/当前/未唱三态)
+  4. **均衡器** — 底部细竖线双正弦律动 + 整行行级高亮填充
+- 修复 `SceneBuilder` 缺失 tools 注入: 提取共享 `LuaEnv.injectTools` (toChars/loadFont), SceneBuilder 与 LuaScriptEngine 共用 — 修复脚本模式脚本顶层引用 tools 时 hasOnDraw 检测误判为脚本错误并回退的问题
+- 新增 `ScenePresetsTest` (4 用例): 全部预设在不同播放位置 / 占位 / 无歌词状态下执行不抛异常
+
 ## 2026-08-04 — 修复歌曲 sheet 弹出时系统栏出现导致布局被挤压
 
 - 根因: PlayerScreen 使用 `systemBarsPadding()`, 沉浸式模式下拖拽 sheet 触发瞬时系统栏 (transient bars) → insets 变化 → 主布局被挤压跳动

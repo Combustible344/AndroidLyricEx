@@ -2,17 +2,14 @@ package com.example.pra.ui.scene
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Typeface
 import android.util.Log
 import com.example.pra.data.model.LyricLine
 import com.example.pra.ui.state.PlayerUiState
 import org.luaj.vm2.Globals
 import org.luaj.vm2.LuaTable
 import org.luaj.vm2.LuaValue
-import org.luaj.vm2.lib.OneArgFunction
 import org.luaj.vm2.lib.jse.CoerceJavaToLua
 import org.luaj.vm2.lib.jse.JsePlatform
-import java.io.File
 
 /**
  * Lua 每帧脚本引擎 (命令缓冲模式)
@@ -42,7 +39,6 @@ class LuaScriptEngine(private val context: Context?) {
     private val adapter = CommandCanvasAdapter(buffer)
     private val animHelper = LuaAnimHelper()
     private val executor = DrawCommandExecutor()
-    private val fontCache = HashMap<String, Typeface>()
     private val stateTable = LuaTable()
     private val envTable = LuaTable()
 
@@ -51,49 +47,7 @@ class LuaScriptEngine(private val context: Context?) {
     init {
         globals.set("canvas", CoerceJavaToLua.coerce(adapter))
         globals.set("anim", CoerceJavaToLua.coerce(animHelper))
-
-        val tools = LuaTable()
-        tools.set("toChars", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                val str = arg.checkjstring() ?: return LuaTable()
-                val table = LuaTable()
-                var index = 1
-                var offset = 0
-                val length = str.length
-                while (offset < length) {
-                    val codePoint = str.codePointAt(offset)
-                    val charCount = Character.charCount(codePoint)
-                    table.set(index++, LuaValue.valueOf(str.substring(offset, offset + charCount)))
-                    offset += charCount
-                }
-                return table
-            }
-        })
-        tools.set("loadFont", object : OneArgFunction() {
-            override fun call(arg: LuaValue): LuaValue {
-                val path = arg.checkjstring() ?: return LuaValue.NIL
-                if (fontCache.containsKey(path)) return CoerceJavaToLua.coerce(fontCache[path])
-                var typeface: Typeface? = null
-                try {
-                    val ctx = context
-                    if (ctx != null) typeface = Typeface.createFromAsset(ctx.assets, path)
-                } catch (e: Exception) {
-                    try {
-                        val file = File(path)
-                        if (file.exists()) typeface = Typeface.createFromFile(file)
-                    } catch (e2: Exception) {
-                        Log.e("LuaScriptEngine", "Failed to load font: $path")
-                    }
-                }
-                return if (typeface != null) {
-                    fontCache[path] = typeface
-                    CoerceJavaToLua.coerce(typeface)
-                } else LuaValue.NIL
-            }
-        })
-        globals.set("tools", tools)
-        globals.set("toChars", tools.get("toChars"))
-        globals.set("loadFont", tools.get("loadFont"))
+        LuaEnv.injectTools(globals, context)
     }
 
     /** 加载脚本并定位 onDraw (脚本模式入口) */
