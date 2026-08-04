@@ -2,6 +2,12 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-08-04 — 新增场景开发指南 (scene_guide.md)
+
+- 新增 `res/raw/scene_guide.md`, 首次运行时自动写入 `lua_scripts/scene_guide.md` (与 scene.lua 同目录)
+- 内容: 双模式说明 (声明式/脚本) 与自动检测、声明式节点字段总表 + 表达式系统 (变量/函数/示例)、脚本模式 canvas/anim/tools/state/env/global_lyrics 完整 API 表 + 可运行示例、性能指南 (命令缓冲/setShadow 开销/缓存/换行)、调试 (scene_error.log/常见错误)、最佳实践清单
+- MainActivity 新增通用 `readRawText(resId)` 资源读取
+
 ## 2026-08-04 — 微光主题 AOD 风格改版 + FileObserver 热重载
 
 - 场景文件监听从 3 秒 mtime 轮询改为 `FileObserver` (CLOSE_WRITE) 事件驱动: 只有 scene.lua 实际被修改才重载, 平时零开销

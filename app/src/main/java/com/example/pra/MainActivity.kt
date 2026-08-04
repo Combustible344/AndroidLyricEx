@@ -201,6 +201,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // 首次运行写入场景开发指南 (scene_guide.md), 指导场景文件开发
+        val guideFile = File(scriptDir, "scene_guide.md")
+        if (!guideFile.exists()) {
+            try {
+                guideFile.writeText(readRawText(R.raw.scene_guide))
+            } catch (_: Exception) {
+            }
+        }
+
         loadScene()
 
         // 文件变化监听: FileObserver 事件驱动, 只有文件被修改 (CLOSE_WRITE) 才回调,
@@ -227,9 +236,12 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 读取内置默认场景脚本 (res/raw/scene_default.lua) */
-    private fun readDefaultSceneScript(): String {
+    private fun readDefaultSceneScript(): String = readRawText(R.raw.scene_default)
+
+    /** 读取内置 raw 资源文本 */
+    private fun readRawText(rawId: Int): String {
         return try {
-            resources.openRawResource(R.raw.scene_default).bufferedReader().use { it.readText() }
+            resources.openRawResource(rawId).bufferedReader().use { it.readText() }
         } catch (_: Exception) {
             ""
         }
