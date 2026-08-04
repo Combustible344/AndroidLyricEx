@@ -24,17 +24,23 @@ import org.luaj.vm2.lib.jse.JsePlatform
  *   变量: t pos time dur playing w h alpha offsetY
  *   函数: sin cos tan sqrt abs floor ceil frac min max pow clamp lerp map smoothstep
  */
+/** 构建结果: 声明式场景 + 是否定义了每帧脚本 (onDraw) */
+data class SceneBuildResult(
+    val scene: LyricScene,
+    val hasOnDraw: Boolean
+)
+
 class SceneBuilder {
 
     private val globals: Globals = JsePlatform.standardGlobals()
 
     /** LuaJ globals 非线程安全, 构建串行化 */
     @Synchronized
-    fun build(scriptContent: String): LyricScene {
+    fun build(scriptContent: String): SceneBuildResult {
         val state = SceneBuildState()
         globals.set("scene", CoerceJavaToLua.coerce(SceneFacade(state)))
         globals.load(scriptContent).call()
-        return state.toScene()
+        return SceneBuildResult(state.toScene(), hasOnDraw = !globals.get("onDraw").isnil())
     }
 
     private class SceneBuildState {

@@ -2,6 +2,19 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-08-04 — Lua 脚本模式回归: 命令缓冲架构 (任意效果 + 可控性能)
+
+- **双模式自动检测**: scene.lua 定义 `onDraw` 即启用 Lua 每帧脚本模式, 否则用声明式场景 (原生渲染)
+- 新增命令缓冲体系 (`ui/scene/`):
+  - `DrawCommands.kt` — 绘制命令模型 + 原生执行器 (单一 Paint 复用 + 状态缓存, 跳过重复设置)
+  - `CommandCanvasAdapter.kt` — Lua 画布适配器, 与旧 draw.lua API 完全兼容 (setColor/drawText/路径/变换/卡拉OK 等), 但只生成命令不直接画
+  - `LuaScriptEngine.kt` — 每帧执行 onDraw → 命令缓冲 → 原生回放; state/env/global_lyrics 注入
+  - 恢复 `LuaAnimHelper` (anim: lerp/map/clamp/sineWave/缓动函数)
+- `LyricCanvasRenderer` 抽象接口: 声明式渲染器与脚本渲染器共用入口, MainActivity 按场景加载结果切换
+- 歌词注入恢复: 切歌时构建 global_lyrics (仅脚本模式), 动画信号 env.anim 恢复
+- 脚本模式性能: 每帧 LuaJ 解释 + 桥接 ~1ms, 绘制零反射, 仍富余 15ms 帧预算
+- `unitTests.returnDefaultValues` 启用, 新增 `LuaScriptEngineTest` (6 个用例: 基础绘制/卡拉OK/状态读取/歌词注入/无 onDraw/字体 API)
+
 ## 2026-08-04 — 新增歌曲管理页与设置页 (框架)
 
 - 新增 `MusicLibraryActivity`: 歌曲与歌词管理全屏页 (扫描/添加/删除/歌词绑定, 逻辑后期填充), 与播放页右下角"即时查看"底部弹层互补

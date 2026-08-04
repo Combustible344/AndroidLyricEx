@@ -10,6 +10,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -21,6 +24,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.example.pra.ui.components.IdleScreenSaver
 import com.example.pra.ui.components.ScreenSaverConfig
 import com.example.pra.ui.components.ScreenSaverRenderer
+import com.example.pra.ui.scene.LuaScriptEngine
+import com.example.pra.ui.scene.LuaScriptRenderer
+import com.example.pra.ui.scene.LyricCanvasRenderer
 import com.example.pra.ui.scene.LyricSceneRenderer
 import com.example.pra.ui.scene.SceneBuilder
 import com.example.pra.ui.screens.PlayerScreen
@@ -47,9 +53,12 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MusicPlayerViewModel by viewModels()
 
-    // 场景构建 (Lua 只在加载时执行一次) + 原生渲染 (每帧执行)
+    // 双模式渲染: 声明式场景 (原生) / Lua 脚本 (命令缓冲)
     private val sceneBuilder = SceneBuilder()
-    private lateinit var sceneRenderer: LyricSceneRenderer
+    private val sceneRenderer = LyricSceneRenderer(this)
+    private val scriptEngine = LuaScriptEngine(this)
+    private val scriptRenderer = LuaScriptRenderer(scriptEngine)
+    private var activeRenderer: LyricCanvasRenderer by mutableStateOf(sceneRenderer)
     private lateinit var sceneFile: File
     private var lastSceneModifiedAt: Long = 0L
     private val sceneWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -68,7 +77,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        sceneRenderer = LyricSceneRenderer(this)
         loadSceneStrategy()
 
         enableEdgeToEdge()
@@ -102,7 +110,29 @@ class MainActivity : ComponentActivity() {
                     syncAtNs = System.nanoTime()
                 }
 
-                // 3. 帧率自适应: 播放中或占位呼吸(无歌词)时需要连续动画 → 60fps;
+                // 3. 切歌淡入动画信号 (供 Lua 脚本模式的 env.anim 使用)
+                val alphaAnim = remember { Animatable(0f) }
+                LaunchedEffect(uiState.currentLyricLine) {
+                    alphaAnim.snapTo(0f)
+                    alphaAnim.animateTo(1f, tween(600, easing = FastOutSlowInEasing))
+                }
+                scriptRenderer.animValue = alphaAnim.value
+
+                // 4. 歌词注入 (仅脚本模式): 切歌时构建一次 global_lyrics
+                LaunchedEffect(uiState.lyrics, activeRenderer) {
+                    if (activeRenderer === scriptRenderer) {
+                        withContext(Dispatchers.IO) {
+                            val luaCode = if (uiState.lyrics.isNotEmpty()) {
+                                scriptEngine.convertLyricsToLuaTable(uiState.lyrics)
+                            } else {
+                                "global_lyrics = {}"
+                            }
+                            withContext(Dispatchers.Main) { scriptEngine.evaluate(luaCode) }
+                        }
+                    }
+                }
+
+                // 5. 帧率自适应: 播放中或占位呼吸(无歌词)时需要连续动画 → 60fps;
                 //    暂停且有歌词时画面静止 → 只画一帧, 帧循环休眠省电
                 val frameRateActive = uiState.isPlaying || uiState.currentLyricLine == null
 
@@ -122,7 +152,7 @@ class MainActivity : ComponentActivity() {
                             syncPosMs
                         }
                         scope.drawIntoCanvas { canvas ->
-                            sceneRenderer.render(
+                            activeRenderer.render(
                                 canvas = canvas.nativeCanvas,
                                 uiState = uiState,
                                 positionMs = positionMs,
@@ -196,7 +226,7 @@ class MainActivity : ComponentActivity() {
         sceneWatchScope.launch {
             val defaultScript = readDefaultSceneScript()
             var usedFallback = false
-            val scene = try {
+            val result = try {
                 sceneBuilder.build(sceneFile.readText())
             } catch (e: Exception) {
                 // 脚本错误 → 记录原因 + 回退默认场景
@@ -205,10 +235,22 @@ class MainActivity : ComponentActivity() {
                 sceneBuilder.build(defaultScript)
             }
             withContext(Dispatchers.Main) {
-                sceneRenderer.setScene(scene)
+                if (result.hasOnDraw) {
+                    // Lua 脚本模式: 每帧执行 onDraw (命令缓冲)
+                    scriptEngine.loadScript(sceneFile.readText())
+                    activeRenderer = scriptRenderer
+                } else {
+                    // 声明式场景模式: 原生渲染
+                    sceneRenderer.setScene(result.scene)
+                    activeRenderer = sceneRenderer
+                }
                 Toast.makeText(
                     this@MainActivity,
-                    if (usedFallback) "场景脚本错误，已回退默认" else "场景已加载",
+                    when {
+                        usedFallback -> "场景脚本错误，已回退默认"
+                        result.hasOnDraw -> "已加载脚本模式场景"
+                        else -> "场景已加载"
+                    },
                     Toast.LENGTH_SHORT
                 ).show()
             }

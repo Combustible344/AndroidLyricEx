@@ -14,7 +14,7 @@ import kotlin.math.sin
  * 原生场景渲染器: 每帧只做 [节点遍历 + 表达式求值 + Canvas 绘制],
  * 无脚本执行、无反射、无每帧分配。歌词布局按 (行, 宽度, 字号) 缓存。
  */
-class LyricSceneRenderer(private val context: Context) {
+class LyricSceneRenderer(private val context: Context) : LyricCanvasRenderer {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val fontMetrics = Paint.FontMetrics()
@@ -78,7 +78,7 @@ class LyricSceneRenderer(private val context: Context) {
 
     // ==================== 渲染入口 ====================
 
-    fun render(
+    override fun render(
         canvas: Canvas,
         uiState: PlayerUiState,
         positionMs: Long,

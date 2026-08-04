@@ -54,6 +54,10 @@ android {
     buildFeatures {
         compose true
     }
+    testOptions {
+        // JVM 单元测试中 Android stub 类 (Log/Canvas 等) 返回默认值而非抛异常
+        unitTests.returnDefaultValues = true
+    }
 }
 
 dependencies {
