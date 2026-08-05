@@ -68,11 +68,19 @@ class DrawCommandExecutor {
         lastAlign = null
         lastStyle = null
         hasShadow = false
+        // 清除跨帧残留: 阴影与渐变填充 (若上一帧设置了而本帧未覆盖, 会污染后续绘制)
+        paint.clearShadowLayer()
+        paint.shader = null
 
         for (cmd in commands) {
             when (cmd) {
                 is DrawCommand.SetColor -> if (cmd.color != lastColor) {
+                    // ★★★ Paint.setColor(int) 会同时重置 alpha=255!
+                    // 必须保留当前 alpha, 否则 "先 setAlpha 后 setColor" 的
+                    // 命令序列 (歌词/粒子) 会让透明度失效, 并污染后续绘制
+                    val keepAlpha = paint.alpha
                     paint.color = cmd.color
+                    paint.alpha = keepAlpha
                     lastColor = cmd.color
                 }
 

@@ -2,6 +2,15 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-08-04 — 修复时钟闪烁 (SetColor 重置 alpha 的渲染器 Bug)
+
+- 根因: `Paint.setColor(int)` 会同时重置 `paint.alpha=255`, 命令执行器回放"先 setAlpha 后 setColor"序列时透明度被静默覆盖, 歌词/粒子 alpha 失效, 残留 255 扩散污染时钟绘制
+- 修复:
+  - `DrawCommandExecutor.SetColor` 保留当前 alpha (alpha 由 SetAlpha 独占控制, 两种命令顺序均正确)
+  - `CommandCanvasAdapter.setColor` 同步修正 (逻辑测量 Paint 与执行器一致)
+  - `execute()` 开头清理跨帧残留 (clearShadowLayer + shader=null)
+- 模板: 时钟抽取为 `drawClock(w,h,now)` 最后绘制, 歌词/占位分支均在绘制完毕后调用, 与歌词动画物理隔离
+
 ## 2026-08-04 — 新增场景开发指南 (scene_guide.md)
 
 - 新增 `res/raw/scene_guide.md`, 首次运行时自动写入 `lua_scripts/scene_guide.md` (与 scene.lua 同目录)

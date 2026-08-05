@@ -29,7 +29,10 @@ class CommandCanvasAdapter(private val buffer: MutableList<DrawCommand>) {
 
     fun setColor(color: Any) {
         val c = parseColor(color)
+        // 与执行器一致: setColor 不改变 alpha (alpha 由 setAlpha 独占控制)
+        val keepAlpha = paint.alpha
         paint.color = c
+        paint.alpha = keepAlpha
         buffer.add(DrawCommand.SetColor(c))
     }
 

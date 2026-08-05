@@ -39,17 +39,13 @@ local font = tools.loadFont(CONFIG.font)
 local clockStr = ""
 local clockMinute = -1
 
-function onDraw(state, env)
-    local w, h = env.width, env.height
-    local t = env.systemTime
-    canvas:drawColor("#000000")
-    if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
-
-    -- ============ 居中偏上: 大时钟 (AOD 风格) ============
-    local minute = math.floor((env.time or 0) / 60000)
+-- 时钟绘制: 固定状态 (白 / alpha 200 / 居中), 与歌词动画完全隔离;
+-- 由 onDraw 在歌词绘制完毕后调用 (最后绘制, 不受任何歌词状态影响)
+local function drawClock(w, h, now)
+    local minute = math.floor(now / 60000)
     if minute ~= clockMinute then
         clockMinute = minute
-        clockStr = os.date("%H:%M", math.floor((env.time or 0) / 1000))
+        clockStr = os.date("%H:%M", math.floor(now / 1000))
     end
     canvas:setTextSize(h * CONFIG.clockSizeRatio)
     canvas:setTextAlign(1)
@@ -58,6 +54,13 @@ function onDraw(state, env)
     canvas:drawText(clockStr, w / 2, h * 0.3 + canvas:getTextCenterOffset())
     canvas:setTextAlign(0)
     canvas:setAlpha(255)
+end
+
+function onDraw(state, env)
+    local w, h = env.width, env.height
+    local t = env.systemTime
+    canvas:drawColor("#000000")
+    if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
 
     -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
     -- 以短边为幅度基准, 均匀分布在中部偏上 (时钟与歌词之间)
@@ -93,6 +96,7 @@ function onDraw(state, env)
         canvas:restore()
         canvas:setTextAlign(0)
         canvas:setAlpha(255)
+        drawClock(w, h, env.time or 0)
         return
     end
 
@@ -176,6 +180,9 @@ function onDraw(state, env)
         end
     end
     canvas:setAlpha(255)
+
+    -- ============ 最后绘制时钟: 独立状态, 不参与歌词动画 ============
+    drawClock(w, h, env.time or 0)
 end
     """.trimIndent()
 
