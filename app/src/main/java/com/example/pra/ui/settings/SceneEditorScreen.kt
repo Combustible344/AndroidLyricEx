@@ -3,6 +3,7 @@ package com.example.pra.ui.settings
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,7 +39,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.pra.MainActivity
 import com.example.pra.R
+import com.example.pra.data.scene.SceneRepository
 import com.example.pra.ui.theme.PraShapes
 import com.example.pra.ui.theme.PraSpacing
 import com.example.pra.ui.theme.praColors
@@ -61,11 +64,15 @@ fun SceneEditorScreen(
     val context = LocalContext.current
 
     val sceneDir = remember { File(context.getExternalFilesDir(null), "lua_scripts") }
-    val sceneFile = remember { File(sceneDir, "scene.lua") }
     val guideFile = remember { File(sceneDir, "scene_guide.md") }
     val errorFile = remember { File(sceneDir, "scene_error.log") }
 
-    var text by remember { mutableStateOf(readText(sceneFile)) }
+    // 多场景: 当前场景来自 SceneRepository, 切换后重建 Activity 让播放器重新加载
+    var sceneName by remember { mutableStateOf(SceneRepository.activeName(context)) }
+    val sceneFile = remember(sceneName) { SceneRepository.file(context, sceneName) }
+    val sceneNames = remember(sceneName) { SceneRepository.names(context) }
+
+    var text by remember(sceneName) { mutableStateOf(readText(sceneFile)) }
     var errorText by remember { mutableStateOf(readText(errorFile)) }
     var guideText by remember { mutableStateOf(readText(guideFile)) }
     var showGuide by remember { mutableStateOf(false) }
@@ -96,7 +103,7 @@ fun SceneEditorScreen(
                     color = colors.textPrimary,
                 )
                 Text(
-                    text = if (showGuide) "Lua API 手册" else "scene.lua · 保存即生效",
+                    text = if (showGuide) "Lua API 手册" else "scenes/$sceneName.lua · 保存即生效",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.textTertiary,
                 )
@@ -111,6 +118,54 @@ fun SceneEditorScreen(
                     .clickable {
                         showGuide = !showGuide
                         if (showGuide) guideText = readText(guideFile)
+                    }
+                    .padding(horizontal = PraSpacing.md, vertical = PraSpacing.sm),
+            )
+        }
+
+        Spacer(Modifier.height(PraSpacing.sm))
+
+        // 场景列表: 点一下就切换 (重建 Activity 让播放器加载新场景)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(PraSpacing.sm),
+        ) {
+            sceneNames.forEach { name ->
+                val selected = name == sceneName
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (selected) colors.onAccent else colors.textSecondary,
+                    modifier = Modifier
+                        .clip(PraShapes.chip)
+                        .background(if (selected) colors.accent else colors.surfaceHigh)
+                        .clickable(enabled = !selected) {
+                            SceneRepository.setActive(context, name)
+                            (context as? MainActivity)?.recreate()
+                        }
+                        .padding(horizontal = PraSpacing.md, vertical = PraSpacing.sm),
+                )
+            }
+            Text(
+                text = "+ 新建",
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.accent,
+                modifier = Modifier
+                    .clip(PraShapes.chip)
+                    .background(colors.surfaceHigh)
+                    .clickable {
+                        var index = sceneNames.size + 1
+                        var name = "场景$index"
+                        while (SceneRepository.file(context, name).exists()) {
+                            index++
+                            name = "场景$index"
+                        }
+                        if (SceneRepository.create(context, name, text.ifBlank { readText(sceneFile) })) {
+                            SceneRepository.setActive(context, name)
+                            (context as? MainActivity)?.recreate()
+                        }
                     }
                     .padding(horizontal = PraSpacing.md, vertical = PraSpacing.sm),
             )

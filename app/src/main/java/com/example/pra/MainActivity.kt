@@ -25,6 +25,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.example.pra.ui.components.IdleScreenSaver
 import com.example.pra.ui.components.ScreenSaverConfig
 import com.example.pra.ui.components.ScreenSaverRenderer
+import com.example.pra.data.scene.SceneRepository
 import com.example.pra.ui.scene.LuaScriptEngine
 import com.example.pra.ui.scene.LuaScriptRenderer
 import com.example.pra.ui.scene.LyricCanvasRenderer
@@ -196,10 +197,27 @@ class MainActivity : ComponentActivity() {
 
     // ==================== 场景加载 ====================
 
+    override fun onResume() {
+        super.onResume()
+        // 在设置里切换了场景 (并重建 Activity) 后, 这里兜底同步一次
+        val active = SceneRepository.activeFile(this)
+        if (sceneFile?.absolutePath != active.absolutePath) {
+            sceneFile = active
+            if (!active.exists()) {
+                runCatching { active.writeText(readDefaultSceneScript()) }
+            }
+            loadScene()
+            startSceneWatch()
+        }
+    }
+
     private fun loadSceneStrategy() {
         val scriptDir = File(getExternalFilesDir(null), "lua_scripts")
         if (!scriptDir.exists()) scriptDir.mkdirs()
-        sceneFile = File(scriptDir, "scene.lua")
+
+        // 多场景: lua_scripts/scenes/<名字>.lua, 旧 scene.lua 首次运行时迁移为「默认」
+        SceneRepository.ensureScenes(this, readDefaultSceneScript())
+        sceneFile = SceneRepository.activeFile(this)
 
         // 旧 draw.lua 一次性备份迁移 (旧格式不再兼容)
         val oldFile = File(scriptDir, "draw.lua")

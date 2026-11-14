@@ -23,7 +23,9 @@
 
 ### 场景编辑器 v1
 
-- 设置 → 伪息屏 → 场景编辑器: 直接编辑设备上的 `lua_scripts/scene.lua`, 等宽字体、可滚动
+- 设置 → 伪息屏 → 场景编辑器: 直接编辑设备上的场景脚本, 等宽字体、可滚动
+- **多场景共存**: 脚本存放在 `lua_scripts/scenes/<名字>.lua`, 编辑器顶部的标签可切换场景、「+ 新建」复制当前脚本; 当前场景记录在 SharedPreferences, 切换后自动重建界面并加载新场景
+- 旧的单文件 `lua_scripts/scene.lua` 首次运行自动迁移为「默认」场景, 不会丢用户改动
 - 保存即生效: 复用已有的 `FileObserver(CLOSE_WRITE)` 热重载, 无需重启
 - 支持「恢复默认」写回内置模板、「API 手册」切换 `scene_guide.md`、脚本报错时展示 `scene_error.log`
 
