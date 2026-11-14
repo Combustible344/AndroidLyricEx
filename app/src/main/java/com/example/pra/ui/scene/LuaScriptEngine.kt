@@ -3,6 +3,7 @@ package com.example.pra.ui.scene
 import android.content.Context
 import android.graphics.Canvas
 import android.util.Log
+import com.example.pra.data.audio.SpectrumTap
 import com.example.pra.data.model.LyricLine
 import com.example.pra.ui.state.PlayerUiState
 import org.luaj.vm2.Globals
@@ -41,6 +42,8 @@ class LuaScriptEngine(private val context: Context?) {
     private val executor = DrawCommandExecutor()
     private val stateTable = LuaTable()
     private val envTable = LuaTable()
+    private val spectrumTable = LuaTable()
+    private var lastSpectrumLog = 0L
 
     private var luaOnDrawFunction: LuaValue = LuaValue.NIL
 
@@ -141,6 +144,29 @@ class LuaScriptEngine(private val context: Context?) {
             }
         }
         stateTable.set("lineProgress", LuaValue.valueOf(lineProg))
+
+        // --- 音频频谱注入 (设置里开启可视化后才有非零值) ---
+        stateTable.set("spectrum", spectrumTable)
+        stateTable.set("hasSpectrum", LuaValue.valueOf(SpectrumTap.enabled))
+        stateTable.set("bass", LuaValue.valueOf(SpectrumTap.bass.toDouble()))
+        stateTable.set("mid", LuaValue.valueOf(SpectrumTap.mid.toDouble()))
+        stateTable.set("treble", LuaValue.valueOf(SpectrumTap.treble.toDouble()))
+        stateTable.set("level", LuaValue.valueOf(SpectrumTap.level.toDouble()))
+        val bars = SpectrumTap.bars
+        for (i in 1..SpectrumTap.BAR_COUNT) {
+            spectrumTable.set(i, LuaValue.valueOf(bars[i - 1].toDouble()))
+        }
+        if (SpectrumTap.enabled) {
+            val now = System.currentTimeMillis()
+            if (now - lastSpectrumLog >= 2000L) {
+                lastSpectrumLog = now
+                Log.d(
+                    "LuaScriptEngine",
+                    "spectrum bass=%.2f mid=%.2f treble=%.2f level=%.2f"
+                        .format(SpectrumTap.bass, SpectrumTap.mid, SpectrumTap.treble, SpectrumTap.level),
+                )
+            }
+        }
 
         // --- 环境注入 ---
         envTable.set("time", LuaValue.valueOf(System.currentTimeMillis().toDouble()))

@@ -345,3 +345,41 @@ end
 - 结构:`drawColor` 背景 → 背景装饰(粒子等) → 时钟/信息 → 歌词 → 叠加元素
 - 时钟类文本按分钟缓存;粒子数量 20 个以内即可有氛围且零压力
 - 注意字号与最大行宽:竖屏默认字号建议 `0.07~0.08 × 屏宽`,超宽自动换行
+
+## 7. 音频频谱可视化
+
+设置 → 伪息屏 → **音频可视化(实验)** 打开后,场景里可以读取实时频谱。
+数据从播放管线内部解码后的 PCM 采集(1024 点 FFT),**不需要录音权限**,也不会被 ROM 限制。
+
+| 字段 | 含义 |
+| --- | --- |
+| `state.hasSpectrum` | 可视化开关是否打开 |
+| `state.spectrum[1..16]` | 16 条频段能量,0.0~1.0,低频在前 |
+| `state.bass` / `state.mid` / `state.treble` | 低/中/高频段能量,0.0~1.0 |
+| `state.level` | 整体响度(柱状均值) |
+
+可复制示例:
+
+```lua
+local function drawSpectrum(state, w, h)
+    if not state.hasSpectrum then return end
+    local n, gap = 16, 4
+    local total = w * 0.72
+    local bw = (total - gap * (n - 1)) / n
+    local baseY, maxH = h * 0.155, h * 0.05
+    local left = (w - total) / 2
+    for i = 1, n do
+        local bh = maxH * (state.spectrum[i] or 0)
+        if bh > 1 then
+            local x = left + (i - 1) * (bw + gap)
+            canvas:drawRect(x, baseY - bh, x + bw, baseY, "#FFFFFF")
+        end
+    end
+end
+```
+
+要点:
+
+- 数值按当前曲目峰值**自适应归一化**,换歌不需要重调增益
+- 关闭开关后所有值恒为 0,脚本用 `state.hasSpectrum` 判断即可,不必额外分支
+- 采集与 FFT 跑在独立线程(约 30 次/秒),不会拖慢 60fps 的绘制帧

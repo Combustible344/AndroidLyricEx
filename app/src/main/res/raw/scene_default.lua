@@ -22,6 +22,8 @@ local CONFIG = {
     baseColor = "#5A5A5A",
     activeColor = "#FFFFFF",
     particleCount = 18,
+    -- 音频频谱柱: 需在 设置 → 伪息屏 → 音频可视化 打开后才有数据
+    spectrumBars = false,
 }
 
 local font = tools.loadFont(CONFIG.font)
@@ -44,6 +46,29 @@ local function drawClock(w, h, now)
     canvas:setAlpha(200)
     canvas:drawText(clockStr, w / 2, h * 0.3 + canvas:getTextCenterOffset())
     canvas:setTextAlign(0)
+    canvas:setAlpha(255)
+end
+
+-- 可选: 音频频谱柱 (CONFIG.spectrumBars = true 时生效)
+-- 画在时钟上方的一条窄带里, 不与歌词/时钟区域重叠
+local function drawSpectrum(state, w, h)
+    if not (state and state.spectrum) then return end
+    local n = 16
+    local gap = 4
+    local total = w * 0.72
+    local bw = (total - gap * (n - 1)) / n
+    local baseY = h * 0.155
+    local maxH = h * 0.05
+    local left = (w - total) / 2
+    for i = 1, n do
+        local value = state.spectrum[i] or 0
+        local bh = maxH * value
+        if bh > 1 then
+            local x = left + (i - 1) * (bw + gap)
+            canvas:setAlpha(90)
+            canvas:drawRect(x, baseY - bh, x + bw, baseY, CONFIG.activeColor)
+        end
+    end
     canvas:setAlpha(255)
 end
 
@@ -233,6 +258,11 @@ function onDraw(state, env)
 
     canvas:restore()
     canvas:setAlpha(255)
+
+    -- 可选频谱柱: 默认关闭, 打开 设置里的音频可视化 + 这里的开关才绘制
+    if CONFIG.spectrumBars then
+        drawSpectrum(state, w, h)
+    end
 
     -- ============ 最后绘制时钟: 独立状态, 不参与歌词动画 ============
     drawClock(w, h, env.time or 0)

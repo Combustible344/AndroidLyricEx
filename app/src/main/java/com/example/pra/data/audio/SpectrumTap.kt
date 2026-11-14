@@ -61,6 +61,7 @@ object SpectrumTap {
     private val ring = FloatArray(FFT_SIZE * 2)
     private var writePos = 0
     private var sampleRate = 44_100
+    private var peakRef = 0.05f
 
     @Volatile
     private var analyzer: Thread? = null
@@ -116,6 +117,7 @@ object SpectrumTap {
                 val points = FFT_SIZE / 2
                 val hzPerBin = sampleRate.toFloat() / FFT_SIZE
                 val next = FloatArray(BAR_COUNT)
+                var framePeak = 0f
                 for (b in 0 until BAR_COUNT) {
                     val lo = (points * ratio(b)).toInt().coerceIn(0, points - 1)
                     val hi = (points * ratio(b + 1)).toInt().coerceIn(lo, points - 1)
@@ -125,23 +127,32 @@ object SpectrumTap {
                             .coerceIn(0f, 1f)
                         if (mag > peak) peak = mag
                     }
-                    next[b] = maxOf(peak * 4f, bars[b] * 0.82f).coerceIn(0f, 1f)
+                    if (peak > framePeak) framePeak = peak
+                    next[b] = peak
                 }
-                bars = next
-                bass = bandEnergy(re, im, 20f, 250f, hzPerBin, points)
-                mid = bandEnergy(re, im, 250f, 2000f, hzPerBin, points)
-                treble = bandEnergy(re, im, 2000f, 16000f, hzPerBin, points)
-                level = (next.average()).toFloat()
+
+                // 自适应归一化: 跟踪曲目的峰值包络 (缓慢衰减), 用 sqrt 压缩动态范围
+                peakRef = maxOf(framePeak, peakRef * 0.995f).coerceAtLeast(0.02f)
+                val ref = peakRef
+                val normalized = FloatArray(BAR_COUNT) { i ->
+                    val raw = sqrt(next[i] / ref).coerceIn(0f, 1f)
+                    maxOf(raw, bars[i] * 0.82f)
+                }
+                bars = normalized
+                bass = bandEnergy(re, im, 20f, 250f, hzPerBin, points, ref)
+                mid = bandEnergy(re, im, 250f, 2000f, hzPerBin, points, ref)
+                treble = bandEnergy(re, im, 2000f, 16000f, hzPerBin, points, ref)
+                level = normalized.average().toFloat()
 
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now - lastLog >= 1000L) {
                     lastLog = now
                     Log.d(
                         TAG,
-                        "samples=$samplesReceived level=%.3f bass=%.3f mid=%.3f treble=%.3f bars=%s"
+                        "samples=$samplesReceived peakRef=%.3f level=%.2f bass=%.2f mid=%.2f treble=%.2f bars=%s"
                             .format(
-                                level, bass, mid, treble,
-                                next.joinToString(",", "[", "]") { "%.2f".format(it) },
+                                ref, level, bass, mid, treble,
+                                normalized.joinToString(",", "[", "]") { "%.2f".format(it) },
                             ),
                     )
                 }
@@ -173,12 +184,14 @@ object SpectrumTap {
         toHz: Float,
         hzPerBin: Float,
         points: Int,
+        ref: Float,
     ): Float {
         val lo = (fromHz / hzPerBin).toInt().coerceIn(0, points - 1)
         val hi = (toHz / hzPerBin).toInt().coerceIn(lo, points - 1)
         var sum = 0f
         for (k in lo..hi) sum += sqrt(re[k] * re[k] + im[k] * im[k]) / (FFT_SIZE / 2f)
-        return (sum / (hi - lo + 1)) * 6f
+        val avg = sum / (hi - lo + 1)
+        return sqrt((avg / ref).coerceIn(0f, 1f))
     }
 
     private fun ratio(index: Int): Float {
