@@ -228,6 +228,7 @@ canvas:drawKaraokeLine(text, x, y, alpha, progress, baseColor, activeColor, shad
 | `systemTime` | 数字 | 单调时钟 (毫秒, 适合动画, 不受系统改时影响) |
 | `width` `height` | 数字 | 屏幕尺寸 |
 | `isPortrait` | 布尔 | 是否竖屏 |
+| `isRotated` | 布尔 | 上层是否声明了旋转 (`-- rotation: 90`)。只读信息: 脚本可据此自己旋转画布; 引擎不会替脚本旋转, 但手势方向会按声明自动映射 |
 | `anim` | 数字 | 切歌动画值 0~1 |
 
 ### 3.6 global_lyrics(歌词表,切歌时注入)

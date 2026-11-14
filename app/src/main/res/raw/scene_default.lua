@@ -157,6 +157,16 @@ function onDraw(state, env)
     canvas:drawColor("#000000")
     if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
 
+    -- 上层声明了旋转 (首行 -- rotation: 90) 时, 脚本自己把画布转成横屏;
+    -- 引擎只提供 env.isRotated 这个只读标志, 不做任何画布变换。
+    local rotated = env.isRotated == true
+    if rotated then
+        canvas:save()
+        canvas:translate(w, 0)
+        canvas:rotate(90)
+        w, h = h, w
+    end
+
     -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
     local s = math.min(w, h)
     canvas:setColor("#FFFFFF")
@@ -307,5 +317,9 @@ function onDraw(state, env)
     -- 频谱: 数字轮廓内高亮白, 轮廓外灰色 (以时钟文字作蒙版)
     if CONFIG.spectrumBars then
         drawSpectrum(state, w, h)
+    end
+
+    if rotated then
+        canvas:restore()
     end
 end

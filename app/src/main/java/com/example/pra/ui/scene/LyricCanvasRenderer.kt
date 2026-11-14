@@ -24,7 +24,7 @@ class LuaScriptRenderer(private val engine: LuaScriptEngine) : LyricCanvasRender
     /** 切歌动画值 (0..1), 由 MainActivity 更新 */
     var animValue: Float = 1f
 
-    /** 场景声明的绘制旋转角 (0 / 90): 90 时引擎按横屏绘制, 脚本无需自己旋转 */
+    /** 场景声明的旋转角 (0 / 90): 只作为信息传给脚本, 画布本身不旋转 */
     var rotation: Int = 0
 
     override fun render(
@@ -35,16 +35,9 @@ class LuaScriptRenderer(private val engine: LuaScriptEngine) : LyricCanvasRender
         height: Float,
         systemTimeMs: Long
     ) {
-        val rotated = rotation % 360 == 90
-        if (rotated) {
-            canvas.save()
-            canvas.translate(width, 0f)
-            canvas.rotate(90f)
-            // 旋转后坐标系宽高互换
-            engine.executeDraw(canvas, uiState, positionMs, height, width, systemTimeMs, animValue, true)
-            canvas.restore()
-        } else {
-            engine.executeDraw(canvas, uiState, positionMs, width, height, systemTimeMs, animValue, false)
-        }
+        engine.executeDraw(
+            canvas, uiState, positionMs, width, height, systemTimeMs, animValue,
+            rotation % 360 == 90,
+        )
     }
 }
