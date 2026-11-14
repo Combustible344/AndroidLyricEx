@@ -16,8 +16,12 @@ object SceneRepository {
     const val DEFAULT_SCENE = "默认"
     const val LANDSCAPE_SCENE = "横屏"
 
-    /** 横屏版: 与默认脚本完全相同, 只在首行声明旋转角 (旋转由引擎完成) */
-    fun landscapeContent(defaultContent: String): String = "-- rotation: 90\n" + defaultContent
+    /**
+     * 横屏版: 与默认脚本同一份, 首行声明旋转 (供上层映射手势),
+     * 并把脚本自己的 ROTATE 开关打开 (绘制是否旋转由脚本决定, 与声明解耦)。
+     */
+    fun landscapeContent(defaultContent: String): String =
+        "-- rotation: 90\n" + defaultContent.replace("local ROTATE = false", "local ROTATE = true")
 
     fun scenesDir(context: Context): File =
         File(context.getExternalFilesDir(null), "lua_scripts/scenes").apply { mkdirs() }

@@ -14,6 +14,10 @@
 --   clockSizeRatio    时钟字号
 --   particleCount     背景微尘数量
 
+-- 本场景是否旋转 90° 绘制。横屏副本会把它改成 true;
+-- 首行 -- rotation: 90 的声明只影响手势映射, 不影响这里的绘制。
+local ROTATE = false
+
 local CONFIG = {
     font = "SourceHanSansCN-Normal.ttf",
     fontSizeRatio = 0.075,
@@ -157,10 +161,9 @@ function onDraw(state, env)
     canvas:drawColor("#000000")
     if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
 
-    -- 上层声明了旋转 (首行 -- rotation: 90) 时, 脚本自己把画布转成横屏;
-    -- 引擎只提供 env.isRotated 这个只读标志, 不做任何画布变换。
-    local rotated = env.isRotated == true
-    if rotated then
+    -- 是否旋转 90° 绘制由**脚本自己**决定 (横屏副本会把上面的 ROTATE 改成 true);
+    -- 首行 -- rotation: 90 只是给上层做手势方向映射用的声明, 不参与绘制。
+    if ROTATE then
         canvas:save()
         canvas:translate(w, 0)
         canvas:rotate(90)
@@ -319,7 +322,7 @@ function onDraw(state, env)
         drawSpectrum(state, w, h)
     end
 
-    if rotated then
+    if ROTATE then
         canvas:restore()
     end
 end

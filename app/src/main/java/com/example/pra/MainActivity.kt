@@ -297,14 +297,22 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 读取场景声明的旋转角: 脚本中形如 `-- rotation: 90` 的注释行 */
+    /**
+     * 读取场景声明的旋转角。
+     * 只识别前 5 行里"以 -- 开头、且形如 -- rotation: 90"的声明行,
+     * 避免脚本正文里的解释性注释 (例如「首行 -- rotation: 90」) 被误判成声明。
+     */
     private fun parseSceneRotation(file: File): Int {
         return runCatching {
             if (!file.exists()) return 0
             val line = file.useLines { lines ->
-                lines.firstOrNull { it.contains("rotation:") }
+                lines.take(5).firstOrNull {
+                    it.trimStart().startsWith("--") && it.contains("rotation:")
+                }
             } ?: return 0
-            Regex("rotation:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
-                ?.let { it % 360 } ?: 0
+            Regex("^\\s*--\\s*rotation:\\s*(-?\\d+)").find(line)?.groupValues?.get(1)
+                ?.toIntOrNull()
+                ?.let { ((it % 360) + 360) % 360 } ?: 0
         }.getOrDefault(0)
     }
 
