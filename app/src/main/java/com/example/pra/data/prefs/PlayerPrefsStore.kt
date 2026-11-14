@@ -1,6 +1,7 @@
 package com.example.pra.data.prefs
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -23,6 +24,16 @@ class PlayerPrefsStore(private val context: Context) {
         val volume = floatPreferencesKey("volume")
         val songId = longPreferencesKey("last_song_id")
         val position = longPreferencesKey("last_position")
+        val visualizer = booleanPreferencesKey("visualizer_enabled")
+    }
+
+    /** 音频可视化开关 (需要 RECORD_AUDIO 权限) */
+    val visualizerEnabled: Flow<Boolean> = context.playerDataStore.data.map { data ->
+        data[Keys.visualizer] ?: false
+    }
+
+    suspend fun setVisualizerEnabled(enabled: Boolean) {
+        context.playerDataStore.edit { data -> data[Keys.visualizer] = enabled }
     }
 
     val prefs: Flow<PlayerPrefs> = context.playerDataStore.data.map { data ->

@@ -223,6 +223,7 @@ private fun MainScaffold(
 
     val playCounts by viewModel.playCounts.collectAsState()
     val rankLimit by viewModel.rankLimit.collectAsState()
+    val visualizerEnabled by viewModel.visualizerEnabled.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
@@ -252,6 +253,8 @@ private fun MainScaffold(
                     onOpenSceneEditor = onOpenSceneEditor,
                     rankLimit = rankLimit,
                     onRankLimitChange = viewModel::setRankLimit,
+                    visualizerEnabled = visualizerEnabled,
+                    onToggleVisualizer = viewModel::setVisualizerEnabled,
                 )
             }
         }
