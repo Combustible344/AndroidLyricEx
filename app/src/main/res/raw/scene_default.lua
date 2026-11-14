@@ -22,8 +22,8 @@ local CONFIG = {
     baseColor = "#5A5A5A",
     activeColor = "#FFFFFF",
     particleCount = 18,
-    -- 音频频谱柱: 需在 设置 → 伪息屏 → 音频可视化 打开后才有数据
-    spectrumBars = false,
+    -- 音频频谱柱: 只有设置里打开「音频可视化」时才有非零数据 (关闭时全 0, 不会绘制)
+    spectrumBars = true,
 }
 
 local font = tools.loadFont(CONFIG.font)
@@ -58,14 +58,14 @@ local function drawSpectrum(state, w, h)
     local total = w * 0.72
     local bw = (total - gap * (n - 1)) / n
     local baseY = h * 0.155
-    local maxH = h * 0.05
+    local maxH = h * 0.06
     local left = (w - total) / 2
     for i = 1, n do
         local value = state.spectrum[i] or 0
         local bh = maxH * value
         if bh > 1 then
             local x = left + (i - 1) * (bw + gap)
-            canvas:setAlpha(90)
+            canvas:setAlpha(160)
             canvas:drawRect(x, baseY - bh, x + bw, baseY, CONFIG.activeColor)
         end
     end
