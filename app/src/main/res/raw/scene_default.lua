@@ -207,6 +207,13 @@ function onDraw(state, env)
         canvas:setTextAlign(0)
         canvas:setAlpha(255)
         drawClockSilhouette(w, h, env.time or 0)
+        -- 没有歌词时也要画频谱, 否则"无歌词 = 频谱不生效"
+        if CONFIG.spectrumBars then
+            drawSpectrum(state, w, h)
+        end
+        if ROTATE then
+            canvas:restore()
+        end
         return
     end
 
@@ -221,6 +228,13 @@ function onDraw(state, env)
     end
     if #units == 0 then
         drawClockSilhouette(w, h, env.time or 0)
+        -- 没有歌词时也要画频谱, 否则"无歌词 = 频谱不生效"
+        if CONFIG.spectrumBars then
+            drawSpectrum(state, w, h)
+        end
+        if ROTATE then
+            canvas:restore()
+        end
         return
     end
 

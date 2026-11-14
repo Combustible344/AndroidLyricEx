@@ -14,6 +14,8 @@ import androidx.activity.viewModels
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -154,11 +157,14 @@ class MainActivity : ComponentActivity() {
                 //    暂停且有歌词时画面静止 → 只画一帧, 帧循环休眠省电
                 val frameRateActive = uiState.isPlaying || uiState.currentLyricLine == null
 
+                // 输入法弹出时 (搜索/编辑脚本) 不进入伪息屏: 打字产生的不是触摸事件
+                val imeVisible = WindowInsets.isImeVisible
+
                 IdleScreenSaver(
                     data = ScreenSaverAnimState(timeString),
                     config = ScreenSaverConfig(backgroundColor = Color.Black),
                     externalInteractionSignal = interactionSignal,
-                    isEnabled = !isPlaylistOpen && !aodSuppressed,
+                    isEnabled = !isPlaylistOpen && !aodSuppressed && !imeVisible,
                     onOverlayVisibilityChange = { overlayVisible = it },
                     frameRateActive = frameRateActive,
                     rotationDegrees = sceneRotation,
