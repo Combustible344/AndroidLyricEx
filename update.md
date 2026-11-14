@@ -35,7 +35,8 @@
   - `SpectrumTap`: 环形缓冲 + 1024 点基-2 FFT + 汉宁窗, 每 33ms 输出 16 条柱子与 bass/mid/treble/level
   - 自适应归一化: 跟踪曲目峰值包络 + sqrt 压缩, 换歌无需重调增益
 - 场景脚本注入: `state.spectrum[1..16]`、`state.bass/mid/treble/level`、`state.hasSpectrum`; 无开关, 播放时自动采集
-- 默认场景频谱柱 (`CONFIG.spectrumBars`, 默认开启): 画在时钟上方的窄带里, 暂停/静音时数值为 0, 自动不绘制
+- 默认场景频谱柱 (`CONFIG.spectrumBars`, 默认开启): 横跨整屏铺在时钟区域, 以时钟文字轮廓为蒙版 —— 数字内高亮白, 数字外灰色; 暂停/静音时数值为 0, 自动不绘制
+- 新增绘制命令 `ClipText`: 用文字轮廓裁剪 (蒙版), 供场景脚本做"文字内填充"类效果
 - `scene_guide.md` 新增「音频频谱可视化」章节与可复制示例
 - 实测: `SpectrumTap` 每秒接收约 88k PCM 采样, 柱子数值稳定在 0.01–0.67, 与场景引擎读到的值一致
 

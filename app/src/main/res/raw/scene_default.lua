@@ -24,6 +24,8 @@ local CONFIG = {
     particleCount = 18,
     -- 音频频谱柱: 播放时自动采集 (无需开关), 暂停/静音时自动不绘制
     spectrumBars = true,
+    -- 频谱柱数量 (横跨整屏, 数字轮廓内的部分为高亮白)
+    spectrumBarCount = 32,
 }
 
 local font = tools.loadFont(CONFIG.font)
@@ -32,9 +34,14 @@ local font = tools.loadFont(CONFIG.font)
 local clockStr = ""
 local clockMinute = -1
 
--- 时钟绘制: 固定状态 (白 / alpha 200 / 居中), 与歌词动画完全隔离;
--- 由 onDraw 在歌词绘制完毕后调用 (最后绘制, 不受任何歌词状态影响)
-local function drawClock(w, h, now)
+-- 时钟: 作为文字蒙版的形状来源与底层灰字。
+-- 先画灰色底字, 频谱柱随后绘制: 轮廓内高亮白, 轮廓外灰色。
+local function clockBaseline(h)
+    canvas:setTextSize(h * CONFIG.clockSizeRatio)
+    return h * 0.3 + canvas:getTextCenterOffset()
+end
+
+local function drawClockSilhouette(w, h, now)
     local minute = math.floor(now / 60000)
     if minute ~= clockMinute then
         clockMinute = minute
@@ -42,34 +49,49 @@ local function drawClock(w, h, now)
     end
     canvas:setTextSize(h * CONFIG.clockSizeRatio)
     canvas:setTextAlign(1)
-    canvas:setColor("#FFFFFF")
-    canvas:setAlpha(200)
-    canvas:drawText(clockStr, w / 2, h * 0.3 + canvas:getTextCenterOffset())
+    canvas:setColor(CONFIG.baseColor)
+    canvas:setAlpha(230)
+    canvas:drawText(clockStr, w / 2, clockBaseline(h))
     canvas:setTextAlign(0)
     canvas:setAlpha(255)
 end
 
--- 可选: 音频频谱柱 (CONFIG.spectrumBars = true 时生效)
--- 画在时钟上方的一条窄带里, 不与歌词/时钟区域重叠
+-- 频谱柱: 整幅铺在时钟区域。
+-- 数字轮廓外: 灰色; 数字轮廓内(clipText 文字蒙版): 高亮白色。
 local function drawSpectrum(state, w, h)
     if not (state and state.spectrum) then return end
-    local n = 16
-    local gap = 4
-    local total = w * 0.72
-    local bw = (total - gap * (n - 1)) / n
-    local baseY = h * 0.155
-    local maxH = h * 0.06
-    local left = (w - total) / 2
-    for i = 1, n do
-        local value = state.spectrum[i] or 0
-        local bh = maxH * value
-        if bh > 1 then
-            local x = left + (i - 1) * (bw + gap)
-            canvas:setAlpha(160)
-            canvas:drawRect(x, baseY - bh, x + bw, baseY, CONFIG.activeColor)
+    local n = CONFIG.spectrumBarCount
+    local gap = 2
+    local bw = (w - gap * (n - 1)) / n
+    local baseline = clockBaseline(h)
+    local maxH = h * CONFIG.clockSizeRatio * 0.95
+    local baseY = baseline + h * 0.008
+
+    local function bars(color, alpha, boost)
+        canvas:setAlpha(alpha)
+        for i = 1, n do
+            local src = math.floor((i - 1) * 16 / n) + 1
+            local value = state.spectrum[src] or 0
+            local bh = maxH * math.min(1, value * boost)
+            if bh > 1 then
+                local x = (i - 1) * (bw + gap)
+                canvas:drawRect(x, baseY - bh, x + bw, baseY, color)
+            end
         end
+        canvas:setAlpha(255)
     end
-    canvas:setAlpha(255)
+
+    -- 轮廓外: 灰色 (压低对比, 只做氛围)
+    bars("#202020", 200, 2.4)
+
+    -- 轮廓内: 高亮白 (以时钟文字为蒙版)
+    canvas:setTextSize(h * CONFIG.clockSizeRatio)
+    local textWidth = canvas:measureText(clockStr)
+    canvas:setTextAlign(0)
+    canvas:save()
+    canvas:clipText(clockStr, (w - textWidth) / 2, baseline)
+    bars(CONFIG.activeColor, 255, 2.4)
+    canvas:restore()
 end
 
 -- 歌词区: 时钟下沿 + 间距 → 屏底 90%
@@ -129,6 +151,9 @@ function onDraw(state, env)
         canvas:drawCircle(px, py, pr, "#FFFFFF")
     end
     canvas:setAlpha(255)
+
+    -- 时钟灰字底衬 (频谱柱会覆盖其轮廓内的部分)
+    drawClockSilhouette(w, h, env.time or 0)
 
     local lineIdx = (state.currentLyricIndex or -1) + 1
     local lineObj = global_lyrics and global_lyrics[lineIdx]
@@ -259,11 +284,8 @@ function onDraw(state, env)
     canvas:restore()
     canvas:setAlpha(255)
 
-    -- 可选频谱柱: 默认开启, 播放中自动有数据 (暂停时为 0, 不会绘制)
+    -- 频谱: 数字轮廓内高亮白, 轮廓外灰色 (以时钟文字作蒙版)
     if CONFIG.spectrumBars then
         drawSpectrum(state, w, h)
     end
-
-    -- ============ 最后绘制时钟: 独立状态, 不参与歌词动画 ============
-    drawClock(w, h, env.time or 0)
 end

@@ -37,6 +37,9 @@ sealed class DrawCommand {
     class DrawColor(val color: Int) : DrawCommand()
 
     class ClipRect(val l: Float, val t: Float, val r: Float, val b: Float) : DrawCommand()
+
+    /** 用文字轮廓作为裁剪区域 (文字蒙版): 之后的绘制只出现在字形内部 */
+    class ClipText(val text: String, val x: Float, val y: Float) : DrawCommand()
     object Save : DrawCommand()
     object Restore : DrawCommand()
     class Translate(val dx: Float, val dy: Float) : DrawCommand()
@@ -145,6 +148,19 @@ class DrawCommandExecutor {
                 is DrawCommand.DrawColor -> canvas.drawColor(cmd.color)
 
                 is DrawCommand.ClipRect -> canvas.clipRect(cmd.l, cmd.t, cmd.r, cmd.b)
+
+                is DrawCommand.ClipText -> {
+                    val width = paint.measureText(cmd.text)
+                    val tx = when (paint.textAlign) {
+                        Paint.Align.CENTER -> cmd.x - width / 2f
+                        Paint.Align.RIGHT -> cmd.x - width
+                        else -> cmd.x
+                    }
+                    val textPath = Path().apply {
+                        paint.getTextPath(cmd.text, 0, cmd.text.length, tx, cmd.y, this)
+                    }
+                    canvas.clipPath(textPath)
+                }
                 is DrawCommand.Save -> canvas.save()
                 is DrawCommand.Restore -> canvas.restore()
                 is DrawCommand.Translate -> canvas.translate(cmd.dx, cmd.dy)

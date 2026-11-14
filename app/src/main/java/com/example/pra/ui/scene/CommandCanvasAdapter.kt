@@ -134,6 +134,10 @@ class CommandCanvasAdapter(private val buffer: MutableList<DrawCommand>) {
     fun translate(dx: Float, dy: Float) { buffer.add(DrawCommand.Translate(dx, dy)) }
     fun scale(sx: Float, sy: Float) { buffer.add(DrawCommand.Scale(sx, sy)) }
     fun rotate(deg: Float) { buffer.add(DrawCommand.Rotate(deg)) }
+    fun clipText(text: String, x: Double, y: Double) {
+        buffer.add(DrawCommand.ClipText(text, x.toFloat(), y.toFloat()))
+    }
+
     fun clipRect(l: Float, t: Float, r: Float, b: Float) { buffer.add(DrawCommand.ClipRect(l, t, r, b)) }
 
     // ==================== 测量 ====================
