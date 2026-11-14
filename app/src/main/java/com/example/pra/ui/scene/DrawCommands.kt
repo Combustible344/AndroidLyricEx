@@ -52,7 +52,10 @@ class DrawCommandExecutor {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rectF = RectF()
 
-    private var lastColor = -1
+    // 颜色缓存哨兵: 不能再用 -1 —— 0xFFFFFFFF (不透明白) 的 Int 值恰好是 -1,
+    // 会导致每帧第一条 setColor("#FFFFFF") 被判定为"未变化"而跳过,
+    // 白字沿用上一帧的残留颜色 (通常是黑色) → 黑底黑字整屏全黑。
+    private var lastColor = Int.MIN_VALUE
     private var lastAlpha = -1
     private var lastTextSize = -1f
     private var lastTypeface: Typeface? = null
@@ -61,7 +64,7 @@ class DrawCommandExecutor {
     private var hasShadow = false
 
     fun execute(commands: List<DrawCommand>, canvas: Canvas) {
-        lastColor = -1
+        lastColor = Int.MIN_VALUE
         lastAlpha = -1
         lastTextSize = -1f
         lastTypeface = null

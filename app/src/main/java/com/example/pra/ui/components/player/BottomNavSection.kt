@@ -41,8 +41,8 @@ fun BottomNavSection(
     ) {
         val iconPainter = when (currentMode) {
             PlayMode.Shuffle -> painterResource(id = R.drawable.shuffle_solid)
-            // 如果你没有 repeat_one 的 xml，可以使用 Compose 自带的矢量图
-            PlayMode.LoopOne -> painterResource(id=R.drawable.repeat_solid)
+            PlayMode.LoopOne -> painterResource(id = R.drawable.repeat_solid)
+            else -> painterResource(id = R.drawable.repeat_solid)
         }
         // 1. 左侧按钮 (循环模式) - 套上磨砂壳
         FrostedGlassButton(

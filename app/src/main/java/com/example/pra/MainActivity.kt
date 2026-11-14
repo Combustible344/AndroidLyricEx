@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
             PraTheme {
                 var interactionSignal by remember { mutableLongStateOf(System.currentTimeMillis()) }
                 val uiState by viewModel.uiState.collectAsState()
+                val gestureBindings by viewModel.gestureBindings.collectAsState()
 
                 // 1. 系统时间更新 (1秒一次)
                 var timeString by remember { mutableStateOf("") }
@@ -101,6 +102,18 @@ class MainActivity : ComponentActivity() {
 
                 var isPlaylistOpen by remember { mutableStateOf(false) }
                 var overlayVisible by remember { mutableStateOf(false) }
+                // 播放详情页 / 设置二级页 不允许进入伪息屏
+                var aodSuppressed by remember { mutableStateOf(false) }
+
+                // 弹层（队列/歌曲操作）是独立窗口，出现时 MIUI 会临时恢复系统栏；
+                // 出现后再压一次，保证沉浸式不被破坏
+                LaunchedEffect(isPlaylistOpen) {
+                    if (isPlaylistOpen) {
+                        hideSystemBars()
+                        delay(350)
+                        hideSystemBars()
+                    }
+                }
 
                 // 2. 进度校准: uiState 每次更新时记录同步点,
                 //    帧内由 frameNanos 推演, 获得 60fps 平滑的播放位置
@@ -141,9 +154,11 @@ class MainActivity : ComponentActivity() {
                     data = ScreenSaverAnimState(timeString),
                     config = ScreenSaverConfig(backgroundColor = Color.Black),
                     externalInteractionSignal = interactionSignal,
-                    isEnabled = !isPlaylistOpen,
+                    isEnabled = !isPlaylistOpen && !aodSuppressed,
                     onOverlayVisibilityChange = { overlayVisible = it },
                     frameRateActive = frameRateActive,
+                    gestureBindings = gestureBindings,
+                    onGestureAction = viewModel::runGestureAction,
                     renderer = ScreenSaverRenderer { scope, env, _, frameNanos ->
                         // 组合期收集的最新状态 + 帧内推演, 只失效本 Canvas 的绘制
                         val durationMs = uiState.durationMs.coerceAtLeast(1L)
@@ -164,14 +179,15 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) {
-                    PlayerScreen(
+                    com.example.pra.ui.app.AppRoot(
+                        viewModel = viewModel,
                         onUserActivity = { interactionSignal = System.currentTimeMillis() },
-                        onPlaylistVisibilityChange = { isOpen ->
+                        onOverlayContentVisibilityChange = { isOpen ->
                             isPlaylistOpen = isOpen
-                            // sheet 拖拽可能触发瞬时系统栏, 立即收回, 保持沉浸式
-                            hideSystemBars()
+                            // 弹层打开时立即收回系统栏，保持沉浸式
+                            if (isOpen) hideSystemBars()
                         },
-                        backgroundActive = !overlayVisible
+                        onAodSuppressionChange = { aodSuppressed = it }
                     )
                 }
             }
@@ -200,6 +216,25 @@ class MainActivity : ComponentActivity() {
             } catch (_: Exception) {
             }
         }
+
+        // 场景脚本升级: 仅当设备上的 scene.lua 与"旧内置默认版"逐字节一致时替换,
+        // 用户自己改过的场景不会被覆盖。
+        runCatching {
+            if (sceneFile.exists()) {
+                val legacy = setOf(
+                    "170a711b0fa465127ecd0aa25c645907083844ddacdae60a69cd42eb49a0b1ba",
+                )
+                val currentHash = sha256(sceneFile.readText())
+                if (currentHash in legacy) {
+                    // 文件可能被外部工具 (adb push / 编辑器) 改成只读或换了属主，先删再写
+                    if (!sceneFile.canWrite()) {
+                        sceneFile.delete()
+                    }
+                    sceneFile.writeText(readDefaultSceneScript())
+                    android.util.Log.d("SceneUpgrade", "scene.lua upgraded to bundled default")
+                }
+            }
+        }.onFailure { android.util.Log.e("SceneUpgrade", "upgrade failed", it) }
 
         // 首次运行写入场景开发指南 (scene_guide.md), 指导场景文件开发
         val guideFile = File(scriptDir, "scene_guide.md")
@@ -238,6 +273,11 @@ class MainActivity : ComponentActivity() {
     /** 读取内置默认场景脚本 (res/raw/scene_default.lua) */
     private fun readDefaultSceneScript(): String = readRawText(R.raw.scene_default)
 
+    private fun sha256(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
     /** 读取内置 raw 资源文本 */
     private fun readRawText(rawId: Int): String {
         return try {
@@ -247,8 +287,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 场景构建在 IO 线程 (LuaJ 解析 + 字体文件 IO), 完成后再切回主线程更新渲染器 */
-    private fun loadScene() {
+    /** 场景构建在 IO 线程 (LuaJ 解析 + 字体文件 IO), 完成后再切回主线程更新渲染器 */    private fun loadScene() {
         sceneWatchScope.launch {
             val defaultScript = readDefaultSceneScript()
             var usedFallback = false

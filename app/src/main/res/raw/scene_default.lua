@@ -1,16 +1,23 @@
 -- [[ Lyric Scene · 微光 (Stardust) ]]
 -- 脚本模式 (定义 onDraw): 竖屏布局, 黑白简约, 仿息屏 (AOD) 展示。
--- 布局: 居中偏上大时钟 + 中部微尘漂移 + 中下部分歌词 (卡拉OK)
--- 歌词字号恒定 (不缩放), 超宽自动换行多行显示, 不会溢出屏幕。
+-- 布局: 居中偏上大时钟 + 中部微尘漂移 + 时钟下方的歌词 (卡拉OK)
+--
+-- v2 自适应排版 (彻底解决歌词压时钟):
+--   1) 先按时钟尺寸算出"安全歌词区"(时钟下沿 + 间距 → 屏底 90%), 歌词绝不进入该区域;
+--   2) 在该区域内按可用高度自动缩小字号 (等比回退到 minFontSizeRatio);
+--   3) 缩到最小仍放不下时, 只显示当前行附近的一个"行窗口", 并上下淡出;
+--   4) 最终绘制前再 clipRect 硬裁剪到歌词区, 物理上不可能叠到时钟。
 --
 -- 可调参数集中在 CONFIG:
---   fontSizeRatio     歌词字号 (屏宽比例)
+--   fontSizeRatio     歌词字号基准 (屏高比例)
+--   minFontSizeRatio  自适应缩小的下限
 --   clockSizeRatio    时钟字号
 --   particleCount     背景微尘数量
 
 local CONFIG = {
     font = "SourceHanSansCN-Normal.ttf",
     fontSizeRatio = 0.075,
+    minFontSizeRatio = 0.030,
     clockSizeRatio = 0.12,
     baseColor = "#5A5A5A",
     activeColor = "#FFFFFF",
@@ -40,6 +47,43 @@ local function drawClock(w, h, now)
     canvas:setAlpha(255)
 end
 
+-- 歌词区: 时钟下沿 + 间距 → 屏底 90%
+local function lyricArea(w, h)
+    local clockSize = h * CONFIG.clockSizeRatio
+    local top = h * 0.30 + clockSize * 0.5 + h * 0.045
+    local bottom = h * 0.90
+    local minH = h * 0.10
+    if bottom - top < minH then
+        top = h * 0.42
+        bottom = h * 0.90
+    end
+    return top, bottom
+end
+
+-- 按给定字号把逐字单元折行; 返回 rows 与每个单元的宽度
+local function wrapUnits(units, fontSize, maxWidth)
+    canvas:setTextSize(fontSize)
+    local widths = {}
+    for i = 1, #units do
+        widths[i] = canvas:measureText(units[i].text)
+    end
+    local rows = {}
+    local cur = { start = 1, count = 0, width = 0 }
+    for i = 1, #units do
+        if cur.count > 0 and cur.width + widths[i] > maxWidth then
+            table.insert(rows, cur)
+            cur = { start = i, count = 1, width = widths[i] }
+        else
+            cur.count = cur.count + 1
+            cur.width = cur.width + widths[i]
+        end
+    end
+    if cur.count > 0 then
+        table.insert(rows, cur)
+    end
+    return rows, widths
+end
+
 function onDraw(state, env)
     local w, h = env.width, env.height
     local t = env.systemTime
@@ -47,7 +91,6 @@ function onDraw(state, env)
     if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
 
     -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
-    -- 以短边为幅度基准, 均匀分布在中部偏上 (时钟与歌词之间)
     local s = math.min(w, h)
     canvas:setColor("#FFFFFF")
     for i = 1, CONFIG.particleCount do
@@ -84,46 +127,60 @@ function onDraw(state, env)
         return
     end
 
-    local pos = state.position or 0
-
-    -- ============ 恒定字号: 超宽自动换行, 不缩放 ============
-    local fontSize = h * CONFIG.fontSizeRatio
-    canvas:setTextSize(fontSize)
-
+    -- ============ 逐字单元 (优先字级, 否则按字符切) ============
     local units = lineObj.words
     if not units or #units == 0 then
         units = {}
-        local chars = tools.toChars(lineObj.text)
+        local chars = tools.toChars(lineObj.text or "")
         for i, v in ipairs(chars) do
             units[i] = { text = v, st = lineObj.startTime, et = lineObj.endTime }
         end
     end
-
-    -- 测量
-    local widths = {}
-    for i, u in ipairs(units) do
-        widths[i] = canvas:measureText(u.text)
+    if #units == 0 then
+        drawClock(w, h, env.time or 0)
+        return
     end
 
-    -- 按行宽自动换行分组
-    local maxW = w * 0.9
-    local lines = {}          -- { start, count, width }
-    local cur = { start = 1, count = 0, width = 0 }
-    for i = 1, #units do
-        if cur.width + widths[i] > maxW and cur.count > 0 then
-            table.insert(lines, cur)
-            cur = { start = i, count = 1, width = widths[i] }
-        else
-            cur.count = cur.count + 1
-            cur.width = cur.width + widths[i]
+    local pos = state.position or 0
+    local areaTop, areaBottom = lyricArea(w, h)
+    local areaH = areaBottom - areaTop
+    local maxWidth = w * 0.9
+
+    -- ============ 自适应字号: 放得下就用大字号, 否则等比缩小 ============
+    local fontSize = h * CONFIG.fontSizeRatio
+    local minFontSize = h * CONFIG.minFontSizeRatio
+    local rows, widths, lineHeight
+
+    while true do
+        rows, widths = wrapUnits(units, fontSize, maxWidth)
+        lineHeight = fontSize * 1.5
+        if #rows * lineHeight <= areaH or fontSize <= minFontSize then
+            break
         end
+        fontSize = math.max(minFontSize, fontSize * 0.94)
     end
-    table.insert(lines, cur)
 
-    -- 多行块垂直居中于中下部 (垂直中心 62% 处)
-    local lineHeight = fontSize * 1.5
-    local blockH = #lines * lineHeight
-    local startY = h * 0.62 - blockH / 2 + lineHeight / 2 + canvas:getTextCenterOffset()
+    -- ============ 仍放不下: 只显示当前行附近的窗口 ============
+    local maxRows = math.max(1, math.floor(areaH / lineHeight))
+    local firstRow, lastRow = 1, #rows
+    if #rows > maxRows then
+        -- 以"已唱完的最后一行"的下一行作为锚点
+        local anchorRow = 1
+        for i = 1, #rows do
+            local lastUnit = units[rows[i].start + rows[i].count - 1]
+            if lastUnit and pos >= lastUnit.et then
+                anchorRow = math.min(#rows, i + 1)
+            end
+        end
+        firstRow = math.max(1, anchorRow - math.floor(maxRows / 2))
+        lastRow = math.min(#rows, firstRow + maxRows - 1)
+        firstRow = math.max(1, lastRow - maxRows + 1)
+    end
+
+    local visibleRows = lastRow - firstRow + 1
+    local blockH = visibleRows * lineHeight
+    local startY = areaTop + (areaH - blockH) / 2 + lineHeight / 2 + canvas:getTextCenterOffset()
+    startY = math.max(areaTop + lineHeight * 0.6, startY)
 
     -- 进出场: 600ms 缓入上滑 / 缓出上移
     local alpha, dy = 255, 0
@@ -136,22 +193,32 @@ function onDraw(state, env)
         alpha = math.floor((1 - k) * 255)
         dy = -k * fontSize * 0.5
     end
-    canvas:setAlpha(alpha)
 
-    -- ============ 逐字卡拉OK (多行) ============
-    for li, line in ipairs(lines) do
-        local lineY = startY + (li - 1) * lineHeight + dy
-        local x = (w - line.width) / 2
-        for j = line.start, line.start + line.count - 1 do
+    -- ============ 绘制 (硬裁剪到歌词区, 保证不压时钟) ============
+    canvas:setTextSize(fontSize)
+    canvas:setTextAlign(0)
+    canvas:setAlpha(alpha)
+    canvas:save()
+    canvas:clipRect(0, areaTop, w, areaBottom)
+
+    for li = firstRow, lastRow do
+        local row = rows[li]
+        local lineY = startY + (li - firstRow) * lineHeight + dy
+        local x = (w - row.width) / 2
+        for j = row.start, row.start + row.count - 1 do
             local u = units[j]
             canvas:setColor(CONFIG.baseColor)
             canvas:drawText(u.text, x, lineY)
 
             local prog = 0
             if pos >= u.st then
-                if pos >= u.et then prog = 1
-                elseif u.et > u.st then prog = (pos - u.st) / (u.et - u.st)
-                else prog = 1 end
+                if pos >= u.et then
+                    prog = 1
+                elseif u.et > u.st then
+                    prog = (pos - u.st) / (u.et - u.st)
+                else
+                    prog = 1
+                end
             end
             if prog > 0 then
                 canvas:setColor(CONFIG.activeColor)
@@ -163,6 +230,8 @@ function onDraw(state, env)
             x = x + widths[j]
         end
     end
+
+    canvas:restore()
     canvas:setAlpha(255)
 
     -- ============ 最后绘制时钟: 独立状态, 不参与歌词动画 ============

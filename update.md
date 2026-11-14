@@ -2,135 +2,83 @@
 
 记录主要修改时间与内容(时间倒序)。
 
-## 2026-08-04 — 修复时钟闪烁 (SetColor 重置 alpha 的渲染器 Bug)
+## 2026-11-14 — 前端重设计 + 播放层重构 + 伪息屏修复与手势系统
 
-- 根因: `Paint.setColor(int)` 会同时重置 `paint.alpha=255`, 命令执行器回放"先 setAlpha 后 setColor"序列时透明度被静默覆盖, 歌词/粒子 alpha 失效, 残留 255 扩散污染时钟绘制
-- 修复:
-  - `DrawCommandExecutor.SetColor` 保留当前 alpha (alpha 由 SetAlpha 独占控制, 两种命令顺序均正确)
-  - `CommandCanvasAdapter.setColor` 同步修正 (逻辑测量 Paint 与执行器一致)
-  - `execute()` 开头清理跨帧残留 (clearShadowLayer + shader=null)
-- 模板: 时钟抽取为 `drawClock(w,h,now)` 最后绘制, 歌词/占位分支均在绘制完毕后调用, 与歌词动画物理隔离
+### 概览
 
-## 2026-08-04 — 新增场景开发指南 (scene_guide.md)
+- 单 Activity + `NavHost`: `main`(三 Tab) / `player`(全屏播放页) / `gestures`(手势配置)
+- 新增设计系统 (语义色板 / 排版 / 形状 / 间距 / 动效 tokens)
+- 播放层与曲库解耦, 四种播放模式, DataStore 持久化, 进度锚点 + 帧插值
+- 歌词解析重写为**严格增强型 LRC**, 新增自动绑定与文件夹导入
+- 伪息屏: 修复全黑、重写自适应排版、新增可组合手势; 二级页与播放页不再进入息屏
 
-- 新增 `res/raw/scene_guide.md`, 首次运行时自动写入 `lua_scripts/scene_guide.md` (与 scene.lua 同目录)
-- 内容: 双模式说明 (声明式/脚本) 与自动检测、声明式节点字段总表 + 表达式系统 (变量/函数/示例)、脚本模式 canvas/anim/tools/state/env/global_lyrics 完整 API 表 + 可运行示例、性能指南 (命令缓冲/setShadow 开销/缓存/换行)、调试 (scene_error.log/常见错误)、最佳实践清单
-- MainActivity 新增通用 `readRawText(resId)` 资源读取
+### 设计系统与主题
 
-## 2026-08-04 — 微光主题 AOD 风格改版 + FileObserver 热重载
+- `ui/theme/Color.kt` — 新增 `PraColors` 语义色板 (深色/浅色两套), 界面只经 `praColors()` 取色
+- `ui/theme/Type.kt` — 全站 15 档排版层级; **移除内置思源黑体**, 改用系统字体 (`FontFamily.Default`)
+- `ui/theme/Shape.kt` / `Dimens.kt` — 圆角、间距、动效时长与曲线 token (`PraSpacing` / `PraMotion` / `PraShapes`)
+- `ui/theme/Theme.kt` — `PraTheme` 固定深色优先, 映射 M3 ColorScheme, 同步系统栏图标明暗
 
-- 场景文件监听从 3 秒 mtime 轮询改为 `FileObserver` (CLOSE_WRITE) 事件驱动: 只有 scene.lua 实际被修改才重载, 平时零开销
-- 模板改回竖屏布局 (移除 90° 旋转), 仿息屏 (AOD) 展示:
-  - 时钟改为水平居中、垂直 30% 处的大字号 (0.12×屏高), 非角落小字; 分钟变化才重新格式化
-  - 歌词字号恒定 (移除按比例缩放 → 消除切换时忽大忽小), 超宽自动换行多行显示, 逐字卡拉OK 按行绘制
-  - 去除底部进度线; 微尘带移至时钟与歌词之间; 占位歌名移至时钟下方
-- 防烧屏方案 (整帧圆形漂移) 曾实现后按用户要求移除
+### 信息架构与界面
 
-## 2026-08-04 — 微光主题改为全体旋转 90° 横屏绘制
+- `ui/app/AppRoot.kt` — 三 Tab (首页/曲库/设置) + 常驻 MiniPlayer + 路由转场 (播放页自下而上)
+- `ui/app/MiniPlayer.kt` — 玻璃卡片 + 顶部进度线, 点击进入播放页
+- `ui/player/NowPlayingScreen.kt` — 封面取色渐变背景、封面↔歌词 Pager、自绘进度条、队列覆盖层
+- `ui/home/HomeScreen.kt` — 时段问候、继续播放、快捷入口、最近添加
+- `ui/library/LibraryScreen.kt` — 搜索 / 排序 / 长按绑定歌词或移除 / `+` 导入文件
+- `ui/settings/SettingsScreen.kt` — 曲库、外观、伪息屏、关于
+- `ui/settings/GestureSettingsScreen.kt` — 手势绑定列表与步骤编辑器
+- 队列面板由 `ModalBottomSheet` 改为**应用内覆盖层**: 避免弹窗窗口重新拉起系统栏
 
-- onDraw 开头 `save + translate(w,0) + rotate(90)`, 布局坐标系切换为横屏 (宽=屏高, 高=屏宽), 歌词一行容纳更多文字, 竖屏下不再溢出; 手机横放即为正向观看
-- 占位分支与 onDraw 结尾均 `restore` 还原坐标系
+### 播放数据层
 
-## 2026-08-04 — 微光主题粒子分布适配竖屏
+- 队列与曲库分离: 新增 `library` / `queue`, `playFromList(list, songId)`; 曲库页按当前筛选结果起播
+- 四种播放模式: 顺序 / 列表循环 / 单曲循环 / 随机; 以播放器状态为准反推 UI, 不再强行纠偏
+- 播放状态改由 DataStore (`player_prefs`) 持久化, 替代 `player_prefs.json`
+  - 修复程序化切模式时回调风暴覆盖新值
+  - 修复冷启动 `pause()` 回调早于 UI 更新导致模式回退
+- 进度改为**锚点 + 帧插值**: `positionMs` + `positionAnchorNanos`, 播放页 `withFrameNanos` 补间; 每秒一次锚点, 每 10 秒落盘
+- `uiState` 改为派生流, 每次发射前向播放器取实时位置 (修复伪息屏逐字回跳)
+- MediaStore `ContentObserver` + 1.2s 去抖增量刷新
 
-- 背景微尘幅度改以短边为基准 (`s = min(w, h)`): 竖屏下粒子纵向不再拉满 55% 屏高, 改为集中在中部带均匀漂移, 横屏同样适配
+### 歌词
 
-## 2026-08-04 — 默认息屏歌词主题: 微光 (Stardust)
+- 自动绑定: 按「歌名 / 歌手-歌名 / 歌手-歌名」归一化匹配 `lyrics/` 目录下同名 `.lrc`, 只补空缺
+- 设置页新增「从文件夹导入歌词」(SAF `OpenDocumentTree`), 递归复制 `.lrc` 后重新绑定
+- `utils/LyricParser.kt` 重写为 V4 严格模式:
+  - 只解析带 `<mm:ss.xx>` 逐字标签的增强型 LRC; 无标签行整行丢弃
+  - 标签时间配对: 文本开始 = 标签时间, 结束 = 下一标签时间; 空标签即上一字的结束
+  - 时间强制单调不减 (文件里时间倒退会被钳制, 永不回跳)
+  - 损坏标签直接丢弃; 严格 UTF-8 (含 BOM), 不再猜测 GBK
+  - 移除按字长插值伪造逐字时间等全部兜底逻辑
+- 测试: 15 个用例, 含真实 `seasons.lrc` 全文单调性回归 (夹具 `app/src/test/resources/seasons.lrc`)
 
-- 删除 `ScenePresets.kt` / `ScenePresetsTest.kt` (多预设方案, 使用不便)
-- 默认模板 `res/raw/scene_default.lua` 重写为脚本模式主题 "微光":
-  - 背景 18 个微尘粒子缓慢正弦漂移 + 呼吸明灭 (alpha 10~22, 极淡)
-  - 逐字卡拉OK + 600ms 缓入上滑 / 400ms 缓出
-  - 底部整曲进度线 + 前端光点 (呼吸 + 微光)
-  - 顶部歌名·歌手 (半透明)
-- 新增 `SceneDefaultTemplateTest` (3 用例): 脚本模式检测 / 歌词卡拉OK多位置渲染 / 占位渲染
-- 使用方式: 删除设备上 `lua_scripts/scene.lua` 后重启 App, 自动生成新默认模板
+### 伪息屏 (AOD)
 
-## 2026-08-04 — 新增 4 个息屏歌词预设主题 (已删除)
+- 修复整屏全黑: `DrawCommandExecutor` 颜色缓存哨兵 `-1` 与不透明白 `0xFFFFFFFF` 冲突, 每帧首条白色 `setColor` 被跳过 → 改为 `Int.MIN_VALUE`
+- 场景脚本 `res/raw/scene_default.lua` 重写为自适应排版:
+  - 先按时钟尺寸预留安全歌词区 (时钟下沿 + 间距 → 屏底 90%)
+  - 在区域内按可用高度等比缩小字号 (下限 `minFontSizeRatio`)
+  - 仍放不下时只显示当前行附近的行窗口, 上下淡出
+  - 绘制前 `clipRect` 硬裁剪到歌词区, 结构上不可能压到时钟
+- 场景升级: 仅当设备 `scene.lua` 与旧内置默认版逐字节一致 (SHA-256) 时替换, 用户自定义场景不受影响; 只读文件先删再写
+- 手势系统 `data/gesture/Gestures.kt`:
+  - 手势 = 参数化步骤序列 (点击 / 长按 300–2000ms / 四向滑动, 每步可设连续次数, 最多 3 步)
+  - 动作 = 播放暂停 / 上一首 / 下一首 / 快进 10s / 快退 10s / 无操作
+  - 严格顺序匹配, 550ms 静默窗口结算 (区分「左滑」与「左滑×2」)
+  - 1 秒内连点 5 次仍为解锁, 且不误触已绑定的点击类手势
+  - 同一手势签名只允许一条绑定 (保存 / 写入 / 读取三处去重, 后保存者覆盖)
+- 息屏不再打断专注操作: 播放详情页与设置二级页通过路由抑制息屏, 回到 Tab 主页恢复
 
-- 新增 `ScenePresets.kt`, 内置 4 个简约脚本模式主题 (可整体替换设备上的 scene.lua 使用):
-  1. **纯白极简** — 黑底白字逐字卡拉OK + 顶部歌名 + 底部整曲进度线
-  2. **呼吸光晕** — 整行呼吸缩放 + 唱到的字柔光 (shadow 仅活动字, 每帧一次) + 背景极淡圆脉动
-  3. **滑入时间线** — 切行整行滑入 + 歌词下方圆点时间线 (已唱/当前/未唱三态)
-  4. **均衡器** — 底部细竖线双正弦律动 + 整行行级高亮填充
-- 修复 `SceneBuilder` 缺失 tools 注入: 提取共享 `LuaEnv.injectTools` (toChars/loadFont), SceneBuilder 与 LuaScriptEngine 共用 — 修复脚本模式脚本顶层引用 tools 时 hasOnDraw 检测误判为脚本错误并回退的问题
-- 新增 `ScenePresetsTest` (4 用例): 全部预设在不同播放位置 / 占位 / 无歌词状态下执行不抛异常
+### 工程 / 包体
 
-## 2026-08-04 — 修复歌曲 sheet 弹出时系统栏出现导致布局被挤压
+- 新增依赖: `navigation-compose 2.9.8`、`datastore-preferences 1.1.7`、`palette-ktx 1.1.0`
+- 删除 `res/font/source_normal.ttf` / `source_bold.ttf` (19.57 MB), 改用系统字体
+  - debug APK 82.87 MB → **70.99 MB**
+  - 注意: AGP 增量打包不会回收已删除资源占用的空间, 删资源后需先删除旧 APK 或 `clean` 再打包
+- 新增 `data/prefs/` (播放偏好 / 手势绑定)、`ui/util/TimeFormat.kt`、`ui/components/PraArtwork.kt`、`PraSongRow.kt`
 
-- 根因: PlayerScreen 使用 `systemBarsPadding()`, 沉浸式模式下拖拽 sheet 触发瞬时系统栏 (transient bars) → insets 变化 → 主布局被挤压跳动
-- 修复: 移除 `systemBarsPadding()` (沉浸式全屏设计不依赖系统栏 insets); sheet 开合时强制 `hideSystemBars()` 收回瞬时系统栏
+### 验证
 
-## 2026-08-04 — Lua 脚本模式回归: 命令缓冲架构 (任意效果 + 可控性能)
-
-- **双模式自动检测**: scene.lua 定义 `onDraw` 即启用 Lua 每帧脚本模式, 否则用声明式场景 (原生渲染)
-- 新增命令缓冲体系 (`ui/scene/`):
-  - `DrawCommands.kt` — 绘制命令模型 + 原生执行器 (单一 Paint 复用 + 状态缓存, 跳过重复设置)
-  - `CommandCanvasAdapter.kt` — Lua 画布适配器, 与旧 draw.lua API 完全兼容 (setColor/drawText/路径/变换/卡拉OK 等), 但只生成命令不直接画
-  - `LuaScriptEngine.kt` — 每帧执行 onDraw → 命令缓冲 → 原生回放; state/env/global_lyrics 注入
-  - 恢复 `LuaAnimHelper` (anim: lerp/map/clamp/sineWave/缓动函数)
-- `LyricCanvasRenderer` 抽象接口: 声明式渲染器与脚本渲染器共用入口, MainActivity 按场景加载结果切换
-- 歌词注入恢复: 切歌时构建 global_lyrics (仅脚本模式), 动画信号 env.anim 恢复
-- 脚本模式性能: 每帧 LuaJ 解释 + 桥接 ~1ms, 绘制零反射, 仍富余 15ms 帧预算
-- `unitTests.returnDefaultValues` 启用, 新增 `LuaScriptEngineTest` (6 个用例: 基础绘制/卡拉OK/状态读取/歌词注入/无 onDraw/字体 API)
-
-## 2026-08-04 — 新增歌曲管理页与设置页 (框架)
-
-- 新增 `MusicLibraryActivity`: 歌曲与歌词管理全屏页 (扫描/添加/删除/歌词绑定, 逻辑后期填充), 与播放页右下角"即时查看"底部弹层互补
-- 新增 `SettingsActivity`: 设置页 (屏保/播放/歌词相关设置项, 后期填充)
-- 入口: 播放列表底部弹层新增"歌曲管理"/"设置"两个按钮, 从 `PlaylistBottomSheet` 回调经 Intent 跳转
-- 两个 Activity 均注册于 Manifest (`exported=false`), 深色主题与播放页一致, 不影响 MainActivity 现有屏保结构
-
-## 2026-08-04 — 播放模式固定为两种 (随机 / 单曲循环)
-
-- `syncMode()` 由"从播放器反推状态"改为"把 UI 选定的模式推送到播放器"——UI 状态成为唯一权威, 系统通知栏的 shuffle/重复按钮改动会被强制纠正, 杜绝隐藏的"顺序播放"第三状态
-- 枚举本身维持两种: `PlayMode.Shuffle` (REPEAT_MODE_ALL + shuffle) / `PlayMode.LoopOne` (REPEAT_MODE_ONE)
-
-## 2026-08-04 — 屏保渲染性能优化
-
-- **场景构建移出主线程**: `loadScene()` 整体在 IO 线程执行 (LuaJ 构建 + 字体文件 IO), 完成后再切回主线程更新渲染器; `SceneBuilder.build` 加 `@Synchronized` 防 LuaJ globals 并发竞争; `LyricSceneRenderer.setScene` 改为先预编译表达式再发布场景引用, IO 线程写入与主线程渲染零竞争
-- **帧循环自适应**: `frameRateActive = isPlaying || 无歌词` — 播放中或占位呼吸时 60fps; 暂停且有歌词 (画面静止) 时只渲染一帧后帧循环休眠省电; 切回动态时自动恢复 60fps
-- **微优化**: 渲染器时间改用 `frameNanos` 派生 (单调时钟, 呼吸动画不受系统时间跳变影响); 歌词绘制加 paint 颜色缓存, 连续同色跳过重复 `setColor`
-
-## 2026-08-04 — 场景脚本体系完善
-
-- 默认场景模板移入 `res/raw/scene_default.lua` (原 MainActivity 硬编码常量), 支持资源版本管理
-- 脚本错误写入 `scene_error.log` (与 scene.lua 同目录), Toast 显示具体错误原因
-- 修复 LuaJ 桥接 coercion error: `setFont`/`backgroundColor` 参数从 `LuaValue` 改为 `Any?`; `colorValue` 兼容 LuaValue/table 字段/字符串三种来源
-- 新增 `SceneBuilderTest` (5 个用例), 覆盖模板构建、字体桥接、颜色解析、overlay 节点、错误脚本
-
-## 2026-08-04 — 高性能渲染重构 + LyricParser V2 (提交 8e0bb10)
-
-### 渲染架构: Lua 每帧执行 → 场景描述 + 原生渲染
-
-- 新增 `ui/scene/` 场景体系:
-  - `SceneGraph.kt` — 场景数据模型 (歌词/占位/叠加元素, 属性支持常量或表达式绑定)
-  - `ExprEvaluator.kt` — 表达式引擎: 解析一次编译为指令流, 预分配栈机零分配求值 (变量 t/pos/time/dur/playing/w/h/alpha/offsetY, 函数 sin/cos/lerp/clamp/map/smoothstep 等)
-  - `SceneBuilder.kt` — LuaJ 场景构建 DSL (`scene:setFont/backgroundColor/lyric/placeholder/text/rect/circle`), 脚本只在加载时执行一次
-  - `LyricSceneRenderer.kt` — 原生渲染器: 布局按 (行, 屏宽, 字号) 缓存, 字级卡拉OK仅对活动字 clipRect, 无 setShadowLayer 热路径
-- 删除 `LuaScriptEngine.kt` / `LuaCanvasAdapter.kt` / `LuaAnimHelper.kt` (每帧 Lua 解释 + 反射桥接是卡顿根因)
-- 帧驱动: 移除全局 `frameTime` 心跳, 改为 overlay 内 `withFrameNanos` 只失效屏保 Canvas 绘制, PlayerScreen 不再每帧重组
-- 进度 100ms 校准 + 帧内推演, 卡拉OK填充 60fps 平滑 (原 10fps 台阶)
-- 背景 `AtmosphericFluidBackground` 增加 `active` 参数, 屏保覆盖时冻结 180dp 模糊动画
-- 场景文件 `scene.lua` 修改 3 秒内自动热重载; 旧 `draw.lua` 自动备份为 `.bak`
-
-### LyricParser V2 (以 QQ 音乐/网易云增强歌词为标准)
-
-- 增强格式: 空标签 `<time>` 为上一字结束标记, 单独成行的空标签归属上一行最后一字, 多行头克隆, 损坏标签容错
-- 普通 LRC: 按文字长度加权插值构造逐字时间 (中文单字权重 1, 英文按长度占比), 尾字对齐行尾
-- 编码探测: UTF-8 BOM / UTF-16 BOM / 严格 UTF-8 校验 + 可疑字符启发式 (GBK 回退)
-- 新增 `LyricParserTest` (13 个用例)
-
-### 问题修复
-
-- 签名密钥 `app/src/main/key` 从版本库移除, 改由本地 `keystore.properties` 读取 (已 gitignore)
-- 补 `POST_NOTIFICATIONS` 权限 (Android 13+ 媒体通知), 删除未使用的 `RECORD_AUDIO`, Manifest 去重
-- `onCleared` 的 `runBlocking` 主线程阻塞 → `NonCancellable + IO` (ANR 风险)
-- `seekTo` 增加 `C.TIME_UNSET` 校验 (防溢出)
-- `MusicService`: `playWhenReady` → `isPlaying` 判断; 修复 ExoPlayer 双重 release
-- 删除未使用依赖 `volley` / `generativeai`; `PlayerUiState` 增加 `durationMs` 字段
-- `.gitattributes` EOL 归一化 (仓库 LF), `app/release/` 构建产物退出版本库
-
-### 测试
-
-- 26 个单元测试全部通过: LyricParser 13 + ExprEvaluator 8 + SceneBuilder 5 + 示例 1
+- `:app:assembleDebug` 通过; `:app:testDebugUnitTest` 全绿 (歌词 15 例 + 手势 11 例)
+- 真机 (Redmi, Android 13) 验证: 三 Tab / 播放页 / 队列覆盖层 / 歌词页 / 设置 / 手势配置 / 伪息屏排版与逐字高亮 / 息屏内滑动手势切歌 / 冷启动恢复播放与模式

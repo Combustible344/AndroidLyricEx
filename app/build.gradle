@@ -97,4 +97,9 @@ dependencies {
     implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0"
 
     implementation("org.luaj:luaj-jse:3.0.1")
+
+    // --- 重设计新增：导航 / 持久化 / 封面取色 ---
+    implementation libs.androidx.navigation.compose
+    implementation libs.androidx.datastore.preferences
+    implementation libs.androidx.palette.ktx
 }

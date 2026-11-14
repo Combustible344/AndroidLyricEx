@@ -188,8 +188,7 @@ class AudioRepository(private val context: Context) {
 
     /**
      * 3. 偏好持久化 (进度、模式、音量)
-     */
-    suspend fun savePlayerPrefs(prefs: PlayerPrefs) = withContext(Dispatchers.IO) {
+     */    suspend fun savePlayerPrefs(prefs: PlayerPrefs) = withContext(Dispatchers.IO) {
         try {
             val json = JSONObject().apply {
                 put("songId", prefs.currentSongId)
@@ -218,5 +217,99 @@ class AudioRepository(private val context: Context) {
         } catch (e: Exception) {
             PlayerPrefs()
         }
+    }
+
+    // ==================== 歌词自动绑定 ====================
+
+    /** 应用私有外部目录下的 lyrics/，不需要存储权限即可读取 */
+    fun lyricsDir(): File = File(context.getExternalFilesDir(null), "lyrics").also {
+        if (!it.exists()) it.mkdirs()
+    }
+
+    /**
+     * 为没有绑定歌词的歌曲自动匹配同名 .lrc。
+     * 匹配顺序: 歌名 → 歌手 - 歌名 → 歌手-歌名，忽略大小写/空格/常见分隔符。
+     * 只处理 lyricUri == null 的歌曲，不会覆盖手动绑定。
+     */
+    suspend fun autoBindLyrics(songs: List<Audio>): List<Audio> = withContext(Dispatchers.IO) {
+        val dir = lyricsDir()
+        val files = dir.listFiles { file -> file.isFile && file.name.endsWith(".lrc", true) }
+            ?: return@withContext songs
+        if (files.isEmpty()) return@withContext songs
+
+        val index = HashMap<String, File>(files.size * 2)
+        files.forEach { file ->
+            index[normalizeLyricKey(file.nameWithoutExtension)] = file
+        }
+
+        songs.map { song ->
+            if (song.lyricUri != null) return@map song
+            val candidates = listOf(
+                song.title,
+                "${song.artist} - ${song.title}",
+                "${song.artist}-${song.title}",
+            )
+            val hit = candidates.firstNotNullOfOrNull { index[normalizeLyricKey(it)] }
+            if (hit != null) song.copy(lyricUri = Uri.fromFile(hit)) else song
+        }
+    }
+
+    private fun normalizeLyricKey(raw: String): String = raw
+        .lowercase()
+        .replace(Regex("[\\s_\\-–—·.,'\"()（）\\[\\]【】&]"), "")
+
+    /**
+     * 从用户选中的 SAF 目录树里递归复制所有 .lrc 到应用私有 lyrics/ 目录。
+     * 这样曲库和歌词可以继续留在 Download/music，App 侧只保留副本，
+     * 避免 Android 13 上对非媒体文件（.lrc）没有读取权限的问题。
+     *
+     * @return 成功复制的文件数
+     */
+    suspend fun importLyricsFromTree(treeUri: Uri): Int = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val targetDir = lyricsDir()
+        var copied = 0
+
+        fun walk(parentDocumentId: String) {
+            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                parentDocumentId,
+            )
+            val projection = arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(projection[0])
+                val nameIdx = cursor.getColumnIndexOrThrow(projection[1])
+                val mimeIdx = cursor.getColumnIndexOrThrow(projection[2])
+                while (cursor.moveToNext()) {
+                    val docId = cursor.getString(idIdx) ?: continue
+                    val name = cursor.getString(nameIdx) ?: continue
+                    val mime = cursor.getString(mimeIdx)
+                    when {
+                        mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR -> walk(docId)
+                        name.endsWith(".lrc", ignoreCase = true) -> {
+                            val docUri = android.provider.DocumentsContract
+                                .buildDocumentUriUsingTree(treeUri, docId)
+                            runCatching {
+                                resolver.openInputStream(docUri)?.use { input ->
+                                    File(targetDir, name).outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                    copied++
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        runCatching {
+            walk(android.provider.DocumentsContract.getTreeDocumentId(treeUri))
+        }
+        copied
     }
 }

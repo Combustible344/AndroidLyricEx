@@ -14,6 +14,8 @@
 .cxx
 local.properties
 keystore.properties
+# machine-specific Gradle JDK path (Android Studio "#GRADLE_LOCAL_JAVA_HOME")
+/gradle/config.properties
 app/release/
 app/src/main/key
 .idea/.name

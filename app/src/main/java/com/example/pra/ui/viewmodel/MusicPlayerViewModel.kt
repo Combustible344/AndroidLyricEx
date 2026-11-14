@@ -4,9 +4,13 @@ import android.Manifest
 import android.app.Application
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.media.MediaMetadataRetriever
 import android.media.audiofx.Visualizer
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.OptIn
@@ -19,7 +23,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.example.pra.data.gesture.GestureBinding
+import com.example.pra.data.gesture.Gestures
+import com.example.pra.data.gesture.PlayerAction
 import com.example.pra.data.model.Audio
+import com.example.pra.data.prefs.GestureSettingsStore
+import com.example.pra.data.prefs.PlayerPrefsStore
 import com.example.pra.data.repository.AudioRepository
 import com.example.pra.data.repository.PlayerPrefs
 import com.example.pra.service.MusicService
@@ -29,10 +38,16 @@ import com.example.pra.utils.LyricParser
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -44,20 +59,67 @@ import kotlin.math.max
 class MusicPlayerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = AudioRepository(application)
+    private val prefsStore = PlayerPrefsStore(application)
+    private val gestureStore = GestureSettingsStore(application)
     private val context = application.applicationContext
 
     private val _uiState = MutableStateFlow(PlayerUiState())
-    val uiState = _uiState.asStateFlow()
+
+    /**
+     * 对外状态：每次发射前都向播放器取一次**实时位置**填充 progress/positionMs。
+     *
+     * 为什么要这样：伪息屏（IdleScreenSaver）在**任何** uiState 变化时都会用
+     * `progress * durationMs` 重新锚定帧内推演。歌词行/字变化、点赞、切模式等
+     * 都会发射状态——如果 progress 还是 1 秒前的旧值，AOD 就会被拽回过去，
+     * 表现为「逐字歌词不断回跳」。这里保证锚点永远与发射时刻一致。
+     */
+    val uiState: StateFlow<PlayerUiState> = _uiState
+        .map { snapshot -> snapshot.withFreshPosition() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, PlayerUiState())
+
+    /** 伪息屏手势绑定 (DataStore) */
+    val gestureBindings: StateFlow<List<GestureBinding>> = gestureStore.bindings
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Gestures.defaults)
+
+    private fun PlayerUiState.withFreshPosition(): PlayerUiState {
+        val player = mediaController ?: return this
+        val dur = player.duration
+        if (dur <= 0L || dur == androidx.media3.common.C.TIME_UNSET) return this
+        val pos = player.currentPosition.coerceIn(0L, dur)
+        return copy(
+            progress = pos.toFloat() / dur,
+            currentTime = formatTime(pos),
+            totalTime = formatTime(dur),
+            durationMs = dur,
+            positionMs = pos,
+            positionAnchorNanos = System.nanoTime(),
+        )
+    }
 
     private var mediaController: MediaController? = null
     private var controllerFuture: ListenableFuture<MediaController>? = null
-    private var currentPlaylist: List<Audio> = emptyList()
+
+    /** 完整曲库 */
+    private var library: List<Audio> = emptyList()
+
+    /** 当前播放队列（可以是曲库的子集，例如筛选后的列表） */
+    private var queue: List<Audio> = emptyList()
+
+    /** 媒体库内容变化监听（新歌/删歌自动增量刷新） */
+    private var mediaObserver: ContentObserver? = null
+
+    /** 去抖用的刷新任务 */
+    private var mediaRefreshJob: Job? = null
+
+    /** 最近一次由 UI 主动切换模式的时刻（毫秒） */
+    private var programmaticModeChangeAt = 0L
 
     // 可视化组件
     //private var visualizer: Visualizer? = null
 
     init {
         connectToService()
+        startMediaObserver()
     }
 
     private fun connectToService() {
@@ -92,13 +154,22 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 songs = repository.scanLocalAudio()
                 repository.savePlaylist(songs)
             }
-            val prefs = repository.loadPlayerPrefs()
+
+            // 歌词自动绑定: 给还没有歌词的歌曲匹配 lyrics/ 目录下的同名 .lrc
+            val withLyrics = repository.autoBindLyrics(songs)
+            if (withLyrics != songs) {
+                songs = withLyrics
+                repository.savePlaylist(songs)
+            }
+
+            val prefs = runCatching { prefsStore.prefs.first() }.getOrElse { PlayerPrefs() }
 
             Log.d("Restore", "读取到存档: SongId=${prefs.currentSongId}, Pos=${prefs.currentPosition}")
 
             // 2. 更新内存
-            currentPlaylist = songs
-            _uiState.update { it.copy(playlist = songs) }
+            library = songs
+            queue = songs
+            _uiState.update { it.copy(playlist = songs, queue = songs) }
 
             // 3. 构建 MediaItems
             val items = songs.map { audio ->
@@ -124,6 +195,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 } catch (e: Exception) {
                     PlayMode.Shuffle
                 }
+                programmaticModeChangeAt = System.currentTimeMillis()
                 applyPlayModeToPlayer(player, savedMode)
                 player.volume = prefs.volume
 
@@ -146,6 +218,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             currentTime = formatTime(prefs.currentPosition),
                             totalTime = formatTime(song.duration),
                             durationMs = song.duration,
+                            positionMs = prefs.currentPosition,
+                            positionAnchorNanos = System.nanoTime(),
                             progress = if (song.duration > 0) prefs.currentPosition.toFloat() / song.duration else 0f
                         )
                     }
@@ -170,7 +244,9 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             val prefs = PlayerPrefs(
                 currentSongId = currentId,
                 currentPosition = player.currentPosition,
-                playModeName = _uiState.value.playMode.name,
+                // 以播放器实际状态为准：初始化阶段 pause() 的回调会早于 UI 状态更新，
+                // 若读 _uiState 会把默认模式写回存档，导致冷启动模式回退
+                playModeName = playModeOf(player).name,
                 volume = player.volume
             )
 
@@ -178,12 +254,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 // onCleared 时 viewModelScope 即将取消, 用 NonCancellable 保证写盘完成,
                 // 但不再阻塞主线程 (原实现 runBlocking 有 ANR 风险)
                 viewModelScope.launch(NonCancellable + Dispatchers.IO) {
-                    repository.savePlayerPrefs(prefs)
+                    prefsStore.save(prefs)
                     Log.d("Restore", "退出保存(后台): $prefs")
                 }
             } else {
                 viewModelScope.launch(Dispatchers.IO) {
-                    repository.savePlayerPrefs(prefs)
+                    prefsStore.save(prefs)
                 }
             }
         }
@@ -200,9 +276,11 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
             // 1. 乐观更新
             currentList.removeAt(indexToRemove)
-            currentPlaylist = currentList
+            library = currentList
+            val newQueue = queue.filterNot { it.id == audio.id }
+            queue = newQueue
             repository.savePlaylist(currentList)
-            _uiState.update { it.copy(playlist = currentList) }
+            _uiState.update { it.copy(playlist = currentList, queue = newQueue) }
 
             // 2. 处理空列表
             if (currentList.isEmpty()) {
@@ -222,10 +300,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 return@launch
             }
 
-            // 3. 更新播放器
+            // 3. 更新播放器 (按 mediaId 定位，避免队列与曲库索引不一致)
             mediaController?.let { player ->
-                if (indexToRemove < player.mediaItemCount) {
-                    player.removeMediaItem(indexToRemove)
+                val playerIndex = (0 until player.mediaItemCount).firstOrNull { index ->
+                    player.getMediaItemAt(index).mediaId == audio.id.toString()
+                }
+                if (playerIndex != null) {
+                    player.removeMediaItem(playerIndex)
                 }
             }
         }
@@ -241,7 +322,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             if (idx != -1) {
                 // 1. 更新数据对象
                 current[idx] = current[idx].copy(lyricUri = lyricUri)
-                currentPlaylist = current // 同步内部缓存
+                library = current // 同步内部缓存
 
                 // 2. 更新 UI 和本地存储
                 _uiState.update { it.copy(playlist = current) }
@@ -278,9 +359,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             if (hasChanges) {
-                currentPlaylist = currentList
+                library = currentList
                 repository.savePlaylist(currentList)
-
                 withContext(Dispatchers.Main) {
                     _uiState.update { it.copy(playlist = currentList) }
 
@@ -290,6 +370,30 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }
             }
+        }
+    }
+
+    // --- 歌词文件夹导入 ---
+
+    /**
+     * 从用户选中的系统文件夹（如 Download/music）递归导入 .lrc，
+     * 然后重新自动绑定并刷新当前歌曲歌词。
+     */
+    fun importLyricsFolder(treeUri: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val count = repository.importLyricsFromTree(treeUri)
+            val songs = repository.autoBindLyrics(_uiState.value.playlist)
+            library = songs
+            repository.savePlaylist(songs)
+            _uiState.update { it.copy(playlist = songs) }
+            loadLyricsForCurrentSong(_uiState.value.currentSongId)
+            Toast.makeText(context, "已导入 $count 个歌词文件", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -322,7 +426,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 current.add(newAudio)
 
                 // 3. 更新缓存
-                currentPlaylist = current
+                library = current
                 repository.savePlaylist(current)
                 _uiState.update { it.copy(playlist = current) }
 
@@ -338,6 +442,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     // --- 播放器同步辅助 ---
     // 封装了全量替换并恢复播放状态的逻辑
     private fun syncPlayerPlaylist(player: Player, newSongs: List<Audio>) {
+        // 队列是曲库的子集（用户从筛选列表起播）时不动播放队列，避免打断当前听歌
+        if (newSongs.map { it.id } != library.map { it.id }) return
+
+        queue = newSongs
+        _uiState.update { it.copy(queue = newSongs) }
+
         val currentMediaId = player.currentMediaItem?.mediaId
         val currentPos = player.currentPosition
         val isPlaying = player.isPlaying
@@ -385,11 +495,24 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     // --- 控制逻辑 ---
 
     fun cyclePlayMode() {
-        mediaController?.let {
-            val newMode = if (_uiState.value.playMode == PlayMode.LoopOne) PlayMode.Shuffle else PlayMode.LoopOne
-            applyPlayModeToPlayer(it, newMode)
+        mediaController?.let { player ->
+            val newMode = _uiState.value.playMode.next()
+            // 先打标记: 设置 repeat/shuffle 会触发 Player.Listener 回调，
+            // 不能让回调把中间状态（例如 shuffle 已关、repeat 还没改）写回 UI/存档
+            programmaticModeChangeAt = System.currentTimeMillis()
+            applyPlayModeToPlayer(player, newMode)
             _uiState.update { s -> s.copy(playMode = newMode) }
-            saveCurrentState()
+            val prefs = PlayerPrefs(
+                currentSongId = player.currentMediaItem?.mediaId?.toLongOrNull() ?: -1L,
+                currentPosition = player.currentPosition,
+                playModeName = newMode.name,
+                volume = player.volume,
+            )
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { prefsStore.save(prefs) }
+                    .onSuccess { Log.d("Prefs", "saved mode=${prefs.playModeName} pos=${prefs.currentPosition}") }
+                    .onFailure { Log.e("Prefs", "save failed", it) }
+            }
         }
     }
 
@@ -399,19 +522,57 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    // --- 伪息屏手势 ---
+
+    fun saveGestureBindings(bindings: List<GestureBinding>) {
+        viewModelScope.launch(Dispatchers.IO) { gestureStore.save(bindings) }
+    }
+
+    fun resetGestureBindings() {
+        viewModelScope.launch(Dispatchers.IO) { gestureStore.reset() }
+    }
+
+    /** 伪息屏手势触发时执行对应动作 */
+    fun runGestureAction(action: PlayerAction) {
+        when (action) {
+            PlayerAction.None -> Unit
+            PlayerAction.PlayPause -> togglePlayPause()
+            PlayerAction.Previous -> skipToPrevious()
+            PlayerAction.Next -> skipToNext()
+            PlayerAction.SeekForward -> seekBy(10_000L)
+            PlayerAction.SeekBackward -> seekBy(-10_000L)
+        }
+    }
+
+    private fun seekBy(deltaMs: Long) {
+        mediaController?.let { player ->
+            val duration = player.duration
+            if (duration <= 0L) return@let
+            val target = (player.currentPosition + deltaMs).coerceIn(0L, duration)
+            player.seekTo(target)
+            _uiState.update { state ->
+                state.copy(
+                    positionMs = target,
+                    positionAnchorNanos = System.nanoTime(),
+                    progress = target.toFloat() / duration,
+                    currentTime = formatTime(target),
+                )
+            }
+            updateCurrentLyricLine(target)
+        }
+    }
+
     fun skipToNext() {
-        mediaController?.let {
-            if (it.repeatMode == Player.REPEAT_MODE_ONE) {
-                it.seekTo(0); it.play()
-            } else if (it.hasNextMediaItem()) it.seekToNext() else it.seekToDefaultPosition(0)
+        mediaController?.let { player ->
+            val next = player.nextMediaItemIndex
+            if (next != androidx.media3.common.C.INDEX_UNSET) player.seekToDefaultPosition(next)
         }
     }
 
     fun skipToPrevious() {
-        mediaController?.let {
-            if (it.repeatMode == Player.REPEAT_MODE_ONE) {
-                it.seekTo(0); it.play()
-            } else it.seekToPrevious()
+        mediaController?.let { player ->
+            val previous = player.previousMediaItemIndex
+            if (previous != androidx.media3.common.C.INDEX_UNSET) player.seekToDefaultPosition(previous)
         }
     }
 
@@ -426,15 +587,49 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
             if (dur <= 0 || dur == androidx.media3.common.C.TIME_UNSET) return@let
             val ms = (dur * p).toLong()
             it.seekTo(ms)
-            _uiState.update { s -> s.copy(progress = p, currentTime = formatTime(ms)) }
+            _uiState.update { s ->
+                s.copy(
+                    progress = p,
+                    currentTime = formatTime(ms),
+                    positionMs = ms,
+                    positionAnchorNanos = System.nanoTime(),
+                )
+            }
             updateCurrentLyricLine(ms)
         }
     }
 
     fun playSong(id: Long) {
-        val idx = currentPlaylist.indexOfFirst { it.id == id }
-        if (idx != -1) mediaController?.let { it.seekToDefaultPosition(idx); it.play() }
+        playFromList(library, id)
     }
+
+    /**
+     * 以指定列表作为播放队列，从 songId 开始播放。
+     * 曲库页会传入当前筛选/排序后的列表，这样队列与所见一致，且不影响完整曲库。
+     */
+    fun playFromList(songs: List<Audio>, songId: Long) {
+        val player = mediaController ?: return
+        if (songs.isEmpty()) return
+        val index = songs.indexOfFirst { it.id == songId }.coerceAtLeast(0)
+        val items = songs.map { audio -> audio.toMediaItem() }
+        queue = songs
+        _uiState.update { it.copy(queue = songs) }
+        player.setMediaItems(items, index, 0L)
+        player.prepare()
+        player.play()
+    }
+
+    private fun Audio.toMediaItem(): MediaItem = MediaItem.Builder()
+        .setUri(uri)
+        .setMediaId(id.toString())
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(title)
+                .setArtist(artist)
+                .setArtworkUri(albumArtUri)
+                .build()
+        )
+        .build()
 
     // --- 点赞与歌词解析 ---
 
@@ -449,7 +644,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 val newIsLiked = !old.isLiked
                 val newCount = if (newIsLiked) old.likedCount + 1 else max(0, old.likedCount - 1)
                 currentList[index] = old.copy(isLiked = newIsLiked, likedCount = newCount)
-                currentPlaylist = currentList
+                library = currentList
                 _uiState.update {
                     it.copy(
                         playlist = currentList,
@@ -463,7 +658,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun updateUiLikeState(audioId: Long) {
-        val audio = currentPlaylist.find { it.id == audioId }
+        val audio = library.find { it.id == audioId }
         _uiState.update {
             it.copy(
                 isCurrentSongLiked = audio?.isLiked ?: false,
@@ -474,7 +669,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun loadLyricsForCurrentSong(audioId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            val audio = currentPlaylist.find { it.id == audioId }
+            val audio = library.find { it.id == audioId }
             if (audio?.lyricUri == null) {
                 _uiState.update {
                     it.copy(
@@ -538,7 +733,10 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                             coverUri = meta.artworkUri,
                             currentSongId = id,
                             totalTime = formatTime(mediaController?.duration ?: 0L),
-                            durationMs = mediaController?.duration ?: 0L
+                            durationMs = mediaController?.duration ?: 0L,
+                            positionMs = 0L,
+                            positionAnchorNanos = System.nanoTime(),
+                            progress = 0f,
                         )
                     }
                     saveCurrentState()
@@ -556,41 +754,98 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
 
-            // 模式只允许两种 (随机/单曲循环), UI 状态是唯一权威:
-            // 系统通知栏的 shuffle/重复按钮改动会触发这两个回调,
-            // 这里把播放器强制纠正回当前选定的模式, 杜绝隐藏的"顺序播放"状态
-            override fun onRepeatModeChanged(r: Int) { syncMode() }
-            override fun onShuffleModeEnabledChanged(s: Boolean) { syncMode() }
+            // 模式以播放器为准: 通知栏/耳机按键改动了 shuffle 或 repeat 时,
+            // 这里把状态同步回 UI, 不再强推 UI 选定的模式
+            override fun onRepeatModeChanged(r: Int) { syncModeFromPlayer() }
+            override fun onShuffleModeEnabledChanged(s: Boolean) { syncModeFromPlayer() }
         })
     }
 
-    /** 把 UI 选定的模式推送到播放器 (而不是从播放器反推) */
-    private fun syncMode() {
-        mediaController?.let { applyPlayModeToPlayer(it, _uiState.value.playMode) }
+    /** 播放器当前状态对应的播放模式 */
+    private fun playModeOf(player: Player): PlayMode = when {
+        player.repeatMode == Player.REPEAT_MODE_ONE -> PlayMode.LoopOne
+        player.shuffleModeEnabled -> PlayMode.Shuffle
+        player.repeatMode == Player.REPEAT_MODE_ALL -> PlayMode.LoopAll
+        else -> PlayMode.Sequential
+    }
+
+    /** 从播放器的 repeat/shuffle 反推播放模式 */
+    private fun syncModeFromPlayer() {
+        // 程序化切换模式时的回调风暴：短时间内不回写，避免覆盖用户刚选的模式
+        if (System.currentTimeMillis() - programmaticModeChangeAt < 600L) return
+        mediaController?.let { player ->
+            val mode = playModeOf(player)
+            if (mode != _uiState.value.playMode) {
+                _uiState.update { it.copy(playMode = mode) }
+                saveCurrentState()
+            }
+        }
     }
 
     private fun startProgressUpdateLoop() {
         viewModelScope.launch {
+            var lastUiUpdate = 0L
+            var lastSave = 0L
             while (isActive) {
-                mediaController?.let {
-                    if (it.isPlaying) {
-                        val pos = it.currentPosition
-                        val dur = it.duration.coerceAtLeast(1L)
-                        _uiState.update { s ->
-                            s.copy(
-                                progress = pos.toFloat() / dur,
-                                currentTime = formatTime(pos),
-                                totalTime = formatTime(dur),
-                                durationMs = dur
-                            )
-                        }
+                mediaController?.let { player ->
+                    if (player.isPlaying) {
+                        val pos = player.currentPosition
+                        // 歌词行/字变化才发状态，不受进度刷新频率影响
                         updateCurrentLyricLine(pos)
+
+                        // 进度锚点 1 秒更新一次；UI 用帧插值补间，避免 10Hz 全量重组
+                        val now = System.currentTimeMillis()
+                        if (now - lastUiUpdate >= 1_000L) {
+                            lastUiUpdate = now
+                            val dur = player.duration.coerceAtLeast(1L)
+                            _uiState.update { s ->
+                                s.copy(
+                                    progress = pos.toFloat() / dur,
+                                    currentTime = formatTime(pos),
+                                    totalTime = formatTime(dur),
+                                    durationMs = dur,
+                                    positionMs = pos,
+                                    positionAnchorNanos = System.nanoTime(),
+                                )
+                            }
+                            // 播放中每 10 秒落一次盘，避免进程被系统杀掉时丢失进度
+                            if (now - lastSave >= 10_000L) {
+                                lastSave = now
+                                saveCurrentState()
+                            }
+                        }
                     }
-                    if (it.volume != _uiState.value.volume) _uiState.update { s -> s.copy(volume = it.volume) }
+                    if (player.volume != _uiState.value.volume) {
+                        _uiState.update { s -> s.copy(volume = player.volume) }
+                    }
                 }
                 delay(100L)
             }
         }
+    }
+
+    // --- MediaStore 增量刷新 ---
+
+    /** 监听系统媒体库：新歌落盘/删除后自动去抖刷新，不需要用户手动点扫描 */
+    private fun startMediaObserver() {
+        if (mediaObserver != null) return
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                mediaRefreshJob?.cancel()
+                mediaRefreshJob = viewModelScope.launch {
+                    delay(1_200L)
+                    scanAndAppend()
+                }
+            }
+        }
+        runCatching {
+            context.contentResolver.registerContentObserver(
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                true,
+                observer,
+            )
+        }
+        mediaObserver = observer
     }
 
     // --- 元数据提取 (包含封面) ---
@@ -653,17 +908,32 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     private fun applyPlayModeToPlayer(player: Player, mode: PlayMode) {
         when (mode) {
-            PlayMode.LoopOne -> {
-                player.shuffleModeEnabled = false; player.repeatMode = Player.REPEAT_MODE_ONE
+            PlayMode.Sequential -> {
+                player.shuffleModeEnabled = false
+                player.repeatMode = Player.REPEAT_MODE_OFF
             }
+
+            PlayMode.LoopAll -> {
+                player.shuffleModeEnabled = false
+                player.repeatMode = Player.REPEAT_MODE_ALL
+            }
+
+            PlayMode.LoopOne -> {
+                player.shuffleModeEnabled = false
+                player.repeatMode = Player.REPEAT_MODE_ONE
+            }
+
             PlayMode.Shuffle -> {
-                player.shuffleModeEnabled = true; player.repeatMode = Player.REPEAT_MODE_ALL
+                player.shuffleModeEnabled = true
+                player.repeatMode = Player.REPEAT_MODE_ALL
             }
         }
     }
 
     override fun onCleared() {
         saveCurrentState(isDying = true)
+        mediaObserver?.let { runCatching { context.contentResolver.unregisterContentObserver(it) } }
+        mediaObserver = null
         //releaseVisualizer() // 确保释放
         super.onCleared()
         controllerFuture?.let { MediaController.releaseFuture(it) }
