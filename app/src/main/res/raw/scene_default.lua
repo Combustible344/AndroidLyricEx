@@ -68,6 +68,8 @@ local function drawSpectrum(state, w, h)
     local baseY = baseline + h * 0.008
 
     local function bars(color, alpha, boost)
+        canvas:setStyle(0)
+        canvas:setColor(color)
         canvas:setAlpha(alpha)
         for i = 1, n do
             local src = math.floor((i - 1) * 16 / n) + 1
@@ -75,16 +77,14 @@ local function drawSpectrum(state, w, h)
             local bh = maxH * math.min(1, value * boost)
             if bh > 1 then
                 local x = (i - 1) * (bw + gap)
-                canvas:drawRect(x, baseY - bh, x + bw, baseY, color)
+                local rad = math.min(bw / 2, bh / 2)
+                canvas:drawRoundRect(x, baseY - bh, x + bw, baseY, rad)
             end
         end
         canvas:setAlpha(255)
     end
 
-    -- 轮廓外: 灰色 (压低对比, 只做氛围)
-    bars("#202020", 200, 2.4)
-
-    -- 轮廓内: 高亮白 (以时钟文字为蒙版)
+    -- 只在数字轮廓内可见: 没被文字蒙到的部分完全不绘制
     canvas:setTextSize(h * CONFIG.clockSizeRatio)
     local textWidth = canvas:measureText(clockStr)
     canvas:setTextAlign(0)

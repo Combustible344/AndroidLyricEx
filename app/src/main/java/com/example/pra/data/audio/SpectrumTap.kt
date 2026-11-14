@@ -18,7 +18,7 @@ object SpectrumTap {
     const val BAR_COUNT = 16
     private const val TAG = "SpectrumTap"
     private const val FFT_SIZE = 1024
-    private const val UPDATE_MS = 33L
+    private const val UPDATE_MS = 16L
 
     /** 无需开关: 播放中即采集 (暂停时自动降频) */
     @Volatile
@@ -148,7 +148,8 @@ object SpectrumTap {
                 val ref = peakRef
                 val normalized = FloatArray(BAR_COUNT) { i ->
                     val raw = sqrt(next[i] / ref).coerceIn(0f, 1f)
-                    maxOf(raw, bars[i] * 0.82f)
+                    // 60fps 下衰减系数需比 30fps 更缓, 否则视觉上掉得太快
+                    maxOf(raw, bars[i] * 0.90f)
                 }
                 bars = normalized
                 bass = bandEnergy(re, im, 20f, 250f, hzPerBin, points, ref)
