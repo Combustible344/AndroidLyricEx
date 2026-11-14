@@ -1,8 +1,10 @@
 package com.example.pra.data.audio
 
 import android.util.Log
+import java.util.concurrent.locks.LockSupport
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -18,7 +20,10 @@ object SpectrumTap {
     const val BAR_COUNT = 16
     private const val TAG = "SpectrumTap"
     private const val FFT_SIZE = 1024
-    private const val UPDATE_MS = 16L
+    private const val UPDATE_MS = 8L
+    private const val RISE_TAU_MS = 12f
+    private const val FALL_TAU_MS = 90f
+    private const val PEAK_TAU_MS = 3200f
 
     /** 无需开关: 播放中即采集 (暂停时自动降频) */
     @Volatile
@@ -97,9 +102,18 @@ object SpectrumTap {
             }
             var lastLog = 0L
             var lastSamples = -1L
+            var lastComputeNanos = System.nanoTime()
+            var nextFrameNanos = System.nanoTime()
+            var lastChangeNanos = System.nanoTime()
+            var frames = 0
             while (enabled) {
-                // 暂停/静默时没有新样本, 降频空转, 省电
-                if (samplesReceived == lastSamples) {
+                // 音频是分块推送的, 两帧之间可能暂时没有新样本;
+                // 只有连续 200ms 都没有新样本(暂停/静音)才降频省电, 否则照常刷新
+                val nowNanos = System.nanoTime()
+                if (samplesReceived != lastSamples) {
+                    lastSamples = samplesReceived
+                    lastChangeNanos = nowNanos
+                } else if (nowNanos - lastChangeNanos > 200_000_000L) {
                     try {
                         Thread.sleep(120)
                     } catch (_: InterruptedException) {
@@ -107,7 +121,6 @@ object SpectrumTap {
                     }
                     continue
                 }
-                lastSamples = samplesReceived
                 synchronized(lock) {
                     val start = (writePos - FFT_SIZE).coerceAtLeast(0)
                     for (i in 0 until FFT_SIZE) {
@@ -143,13 +156,21 @@ object SpectrumTap {
                     next[b] = peak
                 }
 
-                // 自适应归一化: 跟踪曲目的峰值包络 (缓慢衰减), 用 sqrt 压缩动态范围
-                peakRef = maxOf(framePeak, peakRef * 0.995f).coerceAtLeast(0.02f)
+                // 归一化基准: 跟踪曲目峰值包络 (约 3.2s 半衰), 用 sqrt 压缩动态范围
+                val computeNow = System.nanoTime()
+                val dtMs = ((computeNow - lastComputeNanos) / 1_000_000f).coerceIn(1f, 120f)
+                lastComputeNanos = computeNow
+                peakRef = maxOf(framePeak, peakRef * exp(-dtMs / PEAK_TAU_MS)).coerceAtLeast(0.02f)
                 val ref = peakRef
+                // 上升快(约 12ms 跟上瞬态)、回落慢(约 90ms), 都用时间常数换算,
+                // 这样 120Hz 采集 + 60fps 绘制时不会有阶梯感
+                val riseAlpha = (1f - exp(-dtMs / RISE_TAU_MS)).coerceIn(0.05f, 1f)
+                val fallAlpha = (1f - exp(-dtMs / FALL_TAU_MS)).coerceIn(0.02f, 1f)
                 val normalized = FloatArray(BAR_COUNT) { i ->
-                    val raw = sqrt(next[i] / ref).coerceIn(0f, 1f)
-                    // 60fps 下衰减系数需比 30fps 更缓, 否则视觉上掉得太快
-                    maxOf(raw, bars[i] * 0.90f)
+                    val target = sqrt(next[i] / ref).coerceIn(0f, 1f)
+                    val previous = bars[i]
+                    val alpha = if (target > previous) riseAlpha else fallAlpha
+                    (previous + (target - previous) * alpha).coerceIn(0f, 1f)
                 }
                 bars = normalized
                 bass = bandEnergy(re, im, 20f, 250f, hzPerBin, points, ref)
@@ -162,17 +183,22 @@ object SpectrumTap {
                     lastLog = now
                     Log.d(
                         TAG,
-                        "samples=$samplesReceived peakRef=%.3f level=%.2f bass=%.2f mid=%.2f treble=%.2f bars=%s"
+                        "fps=$frames samples=$samplesReceived peakRef=%.3f level=%.2f bass=%.2f mid=%.2f treble=%.2f bars=%s"
                             .format(
                                 ref, level, bass, mid, treble,
                                 normalized.joinToString(",", "[", "]") { "%.2f".format(it) },
                             ),
                     )
+                    frames = 0
                 }
-                try {
-                    Thread.sleep(UPDATE_MS)
-                } catch (_: InterruptedException) {
-                    break
+                frames++
+                // 固定节拍: 按绝对时间排帧, 避免 Thread.sleep 抖动导致实际帧率偏低
+                nextFrameNanos += UPDATE_MS * 1_000_000L
+                val sleepNanos = nextFrameNanos - System.nanoTime()
+                if (sleepNanos > 0) {
+                    LockSupport.parkNanos(sleepNanos)
+                } else {
+                    nextFrameNanos = System.nanoTime()
                 }
             }
         }.apply {
