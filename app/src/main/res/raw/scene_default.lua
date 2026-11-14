@@ -26,6 +26,8 @@ local CONFIG = {
     spectrumBars = true,
     -- 频谱折线采样点数量 (越密曲线越平滑)
     spectrumPoints = 48,
+    -- 场景旋转: 90 = 内容按横屏绘制 (手机仍保持竖屏, 手势方向自动跟着转)
+    rotation = 0,
 }
 
 local font = tools.loadFont(CONFIG.font)
@@ -156,6 +158,15 @@ function onDraw(state, env)
     local t = env.systemTime
     canvas:drawColor("#000000")
     if font then canvas:setTypeface(font) else canvas:setTypeface(nil) end
+
+    -- 横屏绘制: 旋转 90° 后按 (h, w) 布局, 设备本身仍是竖屏
+    local rotated = (CONFIG.rotation or 0) == 90
+    if rotated then
+        canvas:save()
+        canvas:translate(w, 0)
+        canvas:rotate(90)
+        w, h = h, w
+    end
 
     -- ============ 背景微尘: 缓慢漂移 + 呼吸明灭 ============
     local s = math.min(w, h)
@@ -307,5 +318,9 @@ function onDraw(state, env)
     -- 频谱: 数字轮廓内高亮白, 轮廓外灰色 (以时钟文字作蒙版)
     if CONFIG.spectrumBars then
         drawSpectrum(state, w, h)
+    end
+
+    if rotated then
+        canvas:restore()
     end
 end

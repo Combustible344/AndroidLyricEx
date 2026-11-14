@@ -63,6 +63,9 @@ class MainActivity : ComponentActivity() {
     private var activeRenderer: LyricCanvasRenderer by mutableStateOf(sceneRenderer)
     private lateinit var sceneFile: File
     private var sceneObserver: FileObserver? = null
+
+    /** 场景声明的绘制旋转角 (0 或 90), 用于手势方向映射 */
+    private var sceneRotation = 0
     private val sceneWatchScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -158,6 +161,7 @@ class MainActivity : ComponentActivity() {
                     isEnabled = !isPlaylistOpen && !aodSuppressed,
                     onOverlayVisibilityChange = { overlayVisible = it },
                     frameRateActive = frameRateActive,
+                    rotationDegrees = sceneRotation,
                     gestureBindings = gestureBindings,
                     onGestureAction = viewModel::runGestureAction,
                     renderer = ScreenSaverRenderer { scope, env, _, frameNanos ->
@@ -201,11 +205,12 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // 在设置里切换了场景 (并重建 Activity) 后, 这里兜底同步一次
         val active = SceneRepository.activeFile(this)
-        if (sceneFile?.absolutePath != active.absolutePath) {
+        if (sceneFile.absolutePath != active.absolutePath) {
             sceneFile = active
             if (!active.exists()) {
                 runCatching { active.writeText(readDefaultSceneScript()) }
             }
+            sceneRotation = parseSceneRotation(active)
             loadScene()
             startSceneWatch()
         }
@@ -218,6 +223,7 @@ class MainActivity : ComponentActivity() {
         // 多场景: lua_scripts/scenes/<名字>.lua, 旧 scene.lua 首次运行时迁移为「默认」
         SceneRepository.ensureScenes(this, readDefaultSceneScript())
         sceneFile = SceneRepository.activeFile(this)
+        sceneRotation = parseSceneRotation(sceneFile)
 
         // 旧 draw.lua 一次性备份迁移 (旧格式不再兼容)
         val oldFile = File(scriptDir, "draw.lua")
@@ -286,6 +292,18 @@ class MainActivity : ComponentActivity() {
     private fun stopSceneWatch() {
         sceneObserver?.stopWatching()
         sceneObserver = null
+    }
+
+    /** 读取场景声明的旋转角: 脚本中形如 `-- rotation: 90` 的注释行 */
+    private fun parseSceneRotation(file: File): Int {
+        return runCatching {
+            if (!file.exists()) return 0
+            val line = file.useLines { lines ->
+                lines.firstOrNull { it.contains("rotation:") }
+            } ?: return 0
+            Regex("rotation:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
+                ?.let { it % 360 } ?: 0
+        }.getOrDefault(0)
     }
 
     /** 读取内置默认场景脚本 (res/raw/scene_default.lua) */

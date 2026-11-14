@@ -14,6 +14,13 @@ object SceneRepository {
     private const val PREFS = "scene_prefs"
     private const val KEY_ACTIVE = "active_scene"
     const val DEFAULT_SCENE = "默认"
+    const val LANDSCAPE_SCENE = "横屏"
+
+    /** 横屏版: 复制默认脚本, 打开 rotation 头并标注旋转角 */
+    fun landscapeContent(defaultContent: String): String {
+        val rotated = defaultContent.replace("rotation = 0,", "rotation = 90,")
+        return "-- rotation: 90\n" + rotated
+    }
 
     fun scenesDir(context: Context): File =
         File(context.getExternalFilesDir(null), "lua_scripts/scenes").apply { mkdirs() }
@@ -39,18 +46,27 @@ object SceneRepository {
             .edit().putString(KEY_ACTIVE, name).apply()
     }
 
-    /** 首次使用: 把旧 scene.lua 或内置默认写成「默认」场景 */
+    /** 首次使用: 把旧 scene.lua 或内置默认写成「默认」场景, 并保证「横屏」场景存在 */
     fun ensureScenes(context: Context, defaultContent: String) {
-        if (names(context).isNotEmpty()) return
-        val legacy = File(context.getExternalFilesDir(null), "lua_scripts/scene.lua")
-        val content = runCatching {
-            if (legacy.exists()) legacy.readText().ifBlank { defaultContent } else defaultContent
-        }.getOrDefault(defaultContent)
-        runCatching { file(context, DEFAULT_SCENE).writeText(content) }
-        if (!names(context).contains(DEFAULT_SCENE)) {
+        val existing = names(context)
+        if (existing.isEmpty()) {
+            val legacy = File(context.getExternalFilesDir(null), "lua_scripts/scene.lua")
+            val content = runCatching {
+                if (legacy.exists()) legacy.readText().ifBlank { defaultContent } else defaultContent
+            }.getOrDefault(defaultContent)
+            runCatching { file(context, DEFAULT_SCENE).writeText(content) }
+        } else if (!existing.contains(DEFAULT_SCENE)) {
             runCatching { file(context, DEFAULT_SCENE).writeText(defaultContent) }
         }
-        setActive(context, DEFAULT_SCENE)
+        // 内置横屏场景: 内容旋转 90°, 设备仍保持竖屏
+        if (!names(context).contains(LANDSCAPE_SCENE)) {
+            runCatching {
+                file(context, LANDSCAPE_SCENE).writeText(landscapeContent(defaultContent))
+            }
+        }
+        if (activeName(context) !in names(context)) {
+            setActive(context, DEFAULT_SCENE)
+        }
     }
 
     fun create(context: Context, name: String, content: String): Boolean {

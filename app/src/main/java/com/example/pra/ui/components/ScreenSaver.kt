@@ -74,6 +74,7 @@ fun <T> IdleScreenSaver(
     isEnabled: Boolean = true,
     onOverlayVisibilityChange: (Boolean) -> Unit = {},
     frameRateActive: Boolean = true,
+    rotationDegrees: Int = 0,
     gestureBindings: List<GestureBinding> = emptyList(),
     onGestureAction: (PlayerAction) -> Unit = {},
     content: @Composable () -> Unit
@@ -141,6 +142,7 @@ fun <T> IdleScreenSaver(
                 config = config,
                 androidContext = currentContext,
                 frameRateActive = frameRateActive,
+                rotationDegrees = rotationDegrees,
                 gestureBindings = gestureBindings,
                 onGestureAction = onGestureAction,
                 onUnlock = {
@@ -159,6 +161,7 @@ private fun <T> ScreenSaverOverlay(
     config: ScreenSaverConfig,
     androidContext: Context,
     frameRateActive: Boolean,
+    rotationDegrees: Int,
     gestureBindings: List<GestureBinding>,
     onGestureAction: (PlayerAction) -> Unit,
     onUnlock: () -> Unit
@@ -180,7 +183,7 @@ private fun <T> ScreenSaverOverlay(
         modifier = Modifier
             .fillMaxSize()
             .background(config.backgroundColor)
-            .pointerInput(gestureBindings, config.tapResetMillis, config.unlockTapCount) {
+            .pointerInput(gestureBindings, config.tapResetMillis, config.unlockTapCount, rotationDegrees) {
                 val swipeSlop = 48.dp.toPx()
                 val tokens = mutableListOf<GestureToken>()
                 var lastTokenAt = 0L
@@ -245,10 +248,23 @@ private fun <T> ScreenSaverOverlay(
                             moved && !longFired -> {
                                 val dx = upPosition.x - down.position.x
                                 val dy = upPosition.y - down.position.y
-                                val primitive = if (abs(dx) >= abs(dy)) {
+                                val rawPrimitive = if (abs(dx) >= abs(dy)) {
                                     if (dx < 0) GesturePrimitive.SwipeLeft else GesturePrimitive.SwipeRight
                                 } else {
                                     if (dy < 0) GesturePrimitive.SwipeUp else GesturePrimitive.SwipeDown
+                                }
+                                // 场景按横屏绘制时, 物理方向要映射回画面方向:
+                                // 上→左, 左→下, 下→右, 右→上 (顺时针 90°)
+                                val primitive = if (rotationDegrees % 360 == 90) {
+                                    when (rawPrimitive) {
+                                        GesturePrimitive.SwipeUp -> GesturePrimitive.SwipeLeft
+                                        GesturePrimitive.SwipeLeft -> GesturePrimitive.SwipeDown
+                                        GesturePrimitive.SwipeDown -> GesturePrimitive.SwipeRight
+                                        GesturePrimitive.SwipeRight -> GesturePrimitive.SwipeUp
+                                        else -> rawPrimitive
+                                    }
+                                } else {
+                                    rawPrimitive
                                 }
                                 appendToken(GestureToken(primitive))
                             }
