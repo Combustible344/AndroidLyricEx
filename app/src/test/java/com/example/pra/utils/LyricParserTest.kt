@@ -216,4 +216,17 @@ class LyricParserTest {
         assertEquals("Rival", first.words.first().text)
         assertTrue(first.words.zipWithNext().all { (a, b) -> b.startTime >= a.startTime })
     }
+
+    @Test
+    fun `closing tag followed by CRLF still ends the last word`() {
+        // Windows 换行下, 收尾标签后残留 "\r"; 不能被误判成正文
+        val entry = parse(
+            "[00:00.00]<00:00.00>你<00:01.00><00:01.00>好<00:02.00>\r\n" +
+                "[00:03.00]<00:03.00>再<00:04.00><00:04.00>见<00:05.00>\r\n"
+        )
+        val first = entry.lines.first()
+        assertEquals("你好", first.text)
+        // 最后一个字 "好" 的结束时间 = 收尾标签 2.00s, 而不是下一句的 3.00s
+        assertEquals(2000L, first.words.last().endTime)
+    }
 }

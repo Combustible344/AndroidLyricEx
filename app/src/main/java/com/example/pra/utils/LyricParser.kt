@@ -87,9 +87,11 @@ object LyricParser {
 
         val lines = ordered.mapIndexedNotNull { index, draft ->
             val nextStart = ordered.getOrNull(index + 1)?.startMs
-            // 文件自带的收尾空标签 (例如 <00:05.67>) 就是这一句最后一个字的结束时间
+            // 文件自带的收尾空标签 (例如 <00:05.67>) 就是这一句最后一个字的结束时间。
+            // 用 isBlank() 而不是 isEmpty(): CRLF 行尾/多余空格会让文本变成 "\r" / " ",
+            // 否则收尾标签会被漏判, 最后一个字会被错误地拉长到下一句开始。
             val closingTagMs = draft.rawWords.lastOrNull()
-                ?.takeIf { it.text.isEmpty() }
+                ?.takeIf { it.text.isBlank() }
                 ?.startMs
 
             val lineEnd = nextStart
