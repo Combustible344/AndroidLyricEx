@@ -162,6 +162,7 @@ fontSize = "w * 0.08 + sin(time * 0.001) * 4"   -- 动态字号
 | `canvas:scale(sx, sy)` | 缩放 |
 | `canvas:rotate(deg)` | 旋转 (角度) |
 | `canvas:clipRect(l, t, r, b)` | 裁剪 (卡拉OK 高亮必备) |
+| `canvas:clipText(text, x, y)` | 按文字轮廓裁剪 (文字蒙版): 之后的绘制只出现在字形内部 |
 
 **测量**:
 | 方法 | 说明 |
@@ -352,7 +353,7 @@ end
 
 | 字段 | 含义 |
 | --- | --- |
-| `state.hasSpectrum` | 可视化开关是否打开 |
+| `state.hasSpectrum` | 当前是否有频谱数据 (恒为 true, 保留兼容) |
 | `state.spectrum[1..16]` | 16 条频段能量,0.0~1.0,低频在前 |
 | `state.bass` / `state.mid` / `state.treble` | 低/中/高频段能量,0.0~1.0 |
 | `state.level` | 整体响度(柱状均值) |
@@ -381,4 +382,46 @@ end
 
 - 数值按当前曲目峰值**自适应归一化**,换歌不需要重调增益
 - 关闭开关后所有值恒为 0,脚本用 `state.hasSpectrum` 判断即可,不必额外分支
-- 采集与 FFT 跑在独立线程(约 30 次/秒),不会拖慢 60fps 的绘制帧
+- 采集与 FFT 跑在独立线程(约 120 次/秒),不会拖慢 60fps 的绘制帧
+
+### 文字蒙版示例: 让频谱只出现在时钟数字里
+
+`clipText` 用文字轮廓裁剪,配合 `save/restore` 可以做出"数字内部填充频谱、外部完全不画"的效果:
+
+```lua
+local function drawClockSpectrum(state, w, h)
+    local clockSize = h * 0.12
+    local baseline = h * 0.3
+    canvas:setTextSize(clockSize)
+    baseline = baseline + canvas:getTextCenterOffset()
+    local text = os.date("%H:%M")
+    local textWidth = canvas:measureText(text)
+
+    -- 底衬灰字: 保证暂停时也能看清时间
+    canvas:setTextAlign(1)
+    canvas:setColor("#5A5A5A")
+    canvas:setAlpha(230)
+    canvas:drawText(text, w / 2, baseline)
+
+    -- 数字内部: 高亮白频谱柱
+    local n, gap = 32, 2
+    local bw = (w - gap * (n - 1)) / n
+    local maxH = clockSize * 0.95
+    canvas:setTextAlign(0)
+    canvas:save()
+    canvas:clipText(text, (w - textWidth) / 2, baseline)
+    canvas:setStyle(0)
+    canvas:setColor("#FFFFFF")
+    for i = 1, n do
+        local v = state.spectrum[math.floor((i - 1) * 16 / n) + 1] or 0
+        local bh = maxH * math.min(1, v * 2.4)
+        if bh > 1 then
+            local x = (i - 1) * (bw + gap)
+            canvas:drawRoundRect(x, baseline - bh, x + bw, baseline, math.min(bw / 2, bh / 2))
+        end
+    end
+    canvas:restore()
+end
+```
+
+注意:`clipText` 的 `x` 是文字起点(左对齐坐标),居中显示时要用 `(w - measureText(text)) / 2` 自己换算。

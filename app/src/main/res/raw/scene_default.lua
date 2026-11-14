@@ -24,8 +24,8 @@ local CONFIG = {
     particleCount = 18,
     -- 音频频谱柱: 播放时自动采集 (无需开关), 暂停/静音时自动不绘制
     spectrumBars = true,
-    -- 频谱柱数量 (横跨整屏, 数字轮廓内的部分为高亮白)
-    spectrumBarCount = 32,
+    -- 频谱折线采样点数量 (越密曲线越平滑)
+    spectrumPoints = 48,
 }
 
 local font = tools.loadFont(CONFIG.font)
@@ -60,29 +60,26 @@ end
 -- 数字轮廓外: 灰色; 数字轮廓内(clipText 文字蒙版): 高亮白色。
 local function drawSpectrum(state, w, h)
     if not (state and state.spectrum) then return end
-    local n = CONFIG.spectrumBarCount
-    local gap = 2
-    local bw = (w - gap * (n - 1)) / n
+    local points = CONFIG.spectrumPoints
     local baseline = clockBaseline(h)
     local maxH = h * CONFIG.clockSizeRatio * 0.95
     local baseY = baseline + h * 0.008
 
-    local function bars(color, alpha, boost)
-        canvas:setStyle(0)
-        canvas:setColor(color)
-        canvas:setAlpha(alpha)
-        for i = 1, n do
-            local src = math.floor((i - 1) * 16 / n) + 1
-            local value = state.spectrum[src] or 0
-            local bh = maxH * math.min(1, value * boost)
-            if bh > 1 then
-                local x = (i - 1) * (bw + gap)
-                local rad = math.min(bw / 2, bh / 2)
-                canvas:drawRoundRect(x, baseY - bh, x + bw, baseY, rad)
-            end
-        end
-        canvas:setAlpha(255)
+    -- 16 个频段线性插值成 points 个采样点, 得到折线的 y 坐标
+    local ys = {}
+    for i = 1, points do
+        local t = (i - 1) / (points - 1)
+        local src = t * 15 + 1
+        local lo = math.floor(src)
+        if lo > 15 then lo = 15 end
+        local frac = src - lo
+        local v1 = state.spectrum[lo] or 0
+        local v2 = state.spectrum[lo + 1] or v1
+        local v = v1 + (v2 - v1) * frac
+        ys[i] = baseY - maxH * math.min(1, v * 1.6)
     end
+
+    local step = w / (points - 1)
 
     -- 只在数字轮廓内可见: 没被文字蒙到的部分完全不绘制
     canvas:setTextSize(h * CONFIG.clockSizeRatio)
@@ -90,7 +87,30 @@ local function drawSpectrum(state, w, h)
     canvas:setTextAlign(0)
     canvas:save()
     canvas:clipText(clockStr, (w - textWidth) / 2, baseline)
-    bars(CONFIG.activeColor, 255, 2.4)
+    canvas:setStyle(0)
+
+    -- 面积填充: 平滑折线 (相邻采样点的中点作为二次贝塞尔终点)
+    canvas:beginPath()
+    canvas:moveTo(0, baseY)
+    canvas:lineTo(0, ys[1])
+    for i = 2, points - 1 do
+        local midX = (i - 1) * step + step / 2
+        local midY = (ys[i] + ys[i + 1]) / 2
+        canvas:quadTo((i - 1) * step, ys[i], midX, midY)
+    end
+    canvas:lineTo(w, ys[points])
+    canvas:lineTo(w, baseY)
+    canvas:closePath()
+
+    -- 上亮下淡的垂直渐变 (先重置 alpha, 否则会继承上一段绘制的透明度)
+    canvas:setAlpha(255)
+    canvas:setLinearGradient(
+        0, baseY - maxH,
+        0, baseY,
+        "#FFFFFFFF", "#99FFFFFF"
+    )
+    canvas:drawPath()
+    canvas:setAlpha(255)
     canvas:restore()
 end
 
