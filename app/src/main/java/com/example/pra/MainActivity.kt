@@ -211,6 +211,7 @@ class MainActivity : ComponentActivity() {
                 runCatching { active.writeText(readDefaultSceneScript()) }
             }
             sceneRotation = parseSceneRotation(active)
+            scriptRenderer.rotation = sceneRotation
             loadScene()
             startSceneWatch()
         }
@@ -224,6 +225,7 @@ class MainActivity : ComponentActivity() {
         SceneRepository.ensureScenes(this, readDefaultSceneScript())
         sceneFile = SceneRepository.activeFile(this)
         sceneRotation = parseSceneRotation(sceneFile)
+        scriptRenderer.rotation = sceneRotation
 
         // 旧 draw.lua 一次性备份迁移 (旧格式不再兼容)
         val oldFile = File(scriptDir, "draw.lua")

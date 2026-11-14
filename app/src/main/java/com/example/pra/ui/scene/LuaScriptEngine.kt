@@ -105,7 +105,8 @@ class LuaScriptEngine(private val context: Context?) {
         width: Float,
         height: Float,
         systemTimeMs: Long,
-        animValue: Float
+        animValue: Float,
+        rotated: Boolean = false
     ) {
         if (luaOnDrawFunction.isnil()) return
 
@@ -168,8 +169,11 @@ class LuaScriptEngine(private val context: Context?) {
             }
         }
 
-        // --- 环境注入 ---
-        envTable.set("time", LuaValue.valueOf(System.currentTimeMillis().toDouble()))
+    // --- 环境注入 ---
+    // isRotated: 上层是否已把画布旋转 90° 绘制 (横屏场景), 脚本按正常坐标书写即可
+    envTable.set("isRotated", LuaValue.valueOf(rotated))
+    stateTable.set("isRotated", LuaValue.valueOf(rotated))
+    envTable.set("time", LuaValue.valueOf(System.currentTimeMillis().toDouble()))
         envTable.set("systemTime", LuaValue.valueOf(systemTimeMs.toDouble()))
         envTable.set("width", LuaValue.valueOf(width.toDouble()))
         envTable.set("height", LuaValue.valueOf(height.toDouble()))
