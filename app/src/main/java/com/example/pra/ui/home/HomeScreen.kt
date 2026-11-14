@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import java.time.LocalTime
 import com.example.pra.data.model.Audio
 import com.example.pra.ui.components.PraArtwork
+import com.example.pra.ui.components.PraArtworkSmall
 import com.example.pra.ui.components.PraSongRow
 import com.example.pra.ui.state.PlayerUiState
 import com.example.pra.ui.theme.PraShapes
@@ -49,13 +51,14 @@ import com.example.pra.ui.theme.praColors
 @Composable
 fun HomeScreen(
     state: PlayerUiState,
+    playCounts: Map<Long, Int>,
+    rankLimit: Int,
     onPlaySong: (List<Audio>, Long) -> Unit,
     onOpenPlayer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = praColors()
     val context = LocalContext.current
-    val recent = state.playlist.take(8)
     val greeting = remember {
         when (LocalTime.now().hour) {
             in 5..8 -> "清晨好"
@@ -65,6 +68,17 @@ fun HomeScreen(
             in 18..22 -> "晚上好"
             else -> "夜深了"
         }
+    }
+
+    // 听歌排行: 按累计播放次数倒序, 次数相同按歌名
+    val ranking = remember(state.playlist, playCounts, rankLimit) {
+        state.playlist
+            .mapNotNull { song ->
+                val count = playCounts[song.id] ?: 0
+                if (count > 0) song to count else null
+            }
+            .sortedWith(compareByDescending<Pair<Audio, Int>> { it.second }.thenBy { it.first.title })
+            .take(rankLimit)
     }
 
     Column(
@@ -131,20 +145,45 @@ fun HomeScreen(
 
         Spacer(Modifier.height(PraSpacing.xxxl))
 
-        SectionTitle(title = "最近添加", action = "全部")
+        SectionTitle(title = "听歌排行", action = "TOP $rankLimit")
         Spacer(Modifier.height(PraSpacing.sm))
 
-        recent.forEach { song ->
-            PraSongRow(
-                song = song,
-                isCurrent = song.id == state.currentSongId,
-                isPlaying = state.isPlaying,
-                onClick = { onPlaySong(recent, song.id) },
+        if (ranking.isEmpty()) {
+            EmptyHint(
+                title = "还没有播放记录",
+                subtitle = "随便播一首，这里会按累计播放次数排行",
             )
+        } else {
+            ranking.forEachIndexed { index, (song, count) ->
+                PraSongRow(
+                    song = song,
+                    isCurrent = song.id == state.currentSongId,
+                    isPlaying = state.isPlaying,
+                    onClick = { onPlaySong(state.playlist, song.id) },
+                    leading = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${index + 1}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (index < 3) colors.accent else colors.textTertiary,
+                                modifier = Modifier.width(24.dp),
+                            )
+                            PraArtworkSmall(song.albumArtUri, size = 44.dp)
+                        }
+                    },
+                    trailing = {
+                        Text(
+                            text = "$count 次",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.textTertiary,
+                        )
+                    },
+                )
+            }
         }
 
         if (state.playlist.isEmpty()) {
-            EmptyHint()
+            EmptyHint(title = "曲库是空的", subtitle = "到设置里扫描本地音乐")
         }
 
         Spacer(Modifier.height(PraSpacing.xxxl))
@@ -267,7 +306,7 @@ fun SectionTitle(title: String, action: String? = null) {
 }
 
 @Composable
-private fun EmptyHint() {
+private fun EmptyHint(title: String, subtitle: String) {
     val colors = praColors()
     Column(
         modifier = Modifier
@@ -276,13 +315,13 @@ private fun EmptyHint() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "还没有歌曲",
+            text = title,
             style = MaterialTheme.typography.titleMedium,
             color = colors.textSecondary,
         )
         Spacer(Modifier.height(PraSpacing.xs))
         Text(
-            text = "到「设置」里扫描本地音乐，或在播放列表里添加文件",
+            text = subtitle,
             style = MaterialTheme.typography.bodySmall,
             color = colors.textTertiary,
         )

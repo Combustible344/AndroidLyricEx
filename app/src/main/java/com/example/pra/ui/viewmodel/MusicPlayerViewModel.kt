@@ -28,6 +28,7 @@ import com.example.pra.data.gesture.Gestures
 import com.example.pra.data.gesture.PlayerAction
 import com.example.pra.data.model.Audio
 import com.example.pra.data.prefs.GestureSettingsStore
+import com.example.pra.data.prefs.ListeningStatsStore
 import com.example.pra.data.prefs.PlayerPrefsStore
 import com.example.pra.data.repository.AudioRepository
 import com.example.pra.data.repository.PlayerPrefs
@@ -61,6 +62,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     private val repository = AudioRepository(application)
     private val prefsStore = PlayerPrefsStore(application)
     private val gestureStore = GestureSettingsStore(application)
+    private val statsStore = ListeningStatsStore(application)
     private val context = application.applicationContext
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -80,6 +82,14 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     /** 伪息屏手势绑定 (DataStore) */
     val gestureBindings: StateFlow<List<GestureBinding>> = gestureStore.bindings
         .stateIn(viewModelScope, SharingStarted.Eagerly, Gestures.defaults)
+
+    /** 每首歌的累计播放次数 */
+    val playCounts: StateFlow<Map<Long, Int>> = statsStore.counts
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** 首页排行显示条数 */
+    val rankLimit: StateFlow<Int> = statsStore.rankLimit
+        .stateIn(viewModelScope, SharingStarted.Eagerly, ListeningStatsStore.DEFAULT_LIMIT)
 
     private fun PlayerUiState.withFreshPosition(): PlayerUiState {
         val player = mediaController ?: return this
@@ -113,6 +123,12 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     /** 最近一次由 UI 主动切换模式的时刻（毫秒） */
     private var programmaticModeChangeAt = 0L
+
+    /** 初始化恢复完成前不统计播放次数 (避免冷启动把"恢复现场"算成一次播放) */
+    private var countingEnabled = false
+
+    /** 最近一次已计入统计的曲目, 防止切歌回调与主动点播重复累加 */
+    private var lastCountedId = -1L
 
     // 可视化组件
     //private var visualizer: Visualizer? = null
@@ -230,6 +246,8 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     player.prepare()
                     player.pause()
                 }
+                // 恢复流程结束, 之后的播放/切歌才开始计入统计
+                countingEnabled = true
             }
         }
     }
@@ -610,6 +628,13 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     fun playFromList(songs: List<Audio>, songId: Long) {
         val player = mediaController ?: return
         if (songs.isEmpty()) return
+
+        // 点的就是当前这首: 保留播放进度, 只恢复播放 (不允许重置到 0)
+        if (player.currentMediaItem?.mediaId == songId.toString()) {
+            player.play()
+            return
+        }
+
         val index = songs.indexOfFirst { it.id == songId }.coerceAtLeast(0)
         val items = songs.map { audio -> audio.toMediaItem() }
         queue = songs
@@ -617,6 +642,20 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
         player.setMediaItems(items, index, 0L)
         player.prepare()
         player.play()
+        countPlay(songId)
+    }
+
+    // --- 收听统计 ---
+
+    fun setRankLimit(limit: Int) {
+        viewModelScope.launch(Dispatchers.IO) { statsStore.setRankLimit(limit) }
+    }
+
+    /** 同一首歌在一次起播/切歌里只计一次, 切歌回调与主动点播不会重复累加 */
+    private fun countPlay(songId: Long) {
+        if (!countingEnabled || songId <= 0L || songId == lastCountedId) return
+        lastCountedId = songId
+        viewModelScope.launch(Dispatchers.IO) { statsStore.increment(songId) }
     }
 
     private fun Audio.toMediaItem(): MediaItem = MediaItem.Builder()
@@ -742,6 +781,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
                     saveCurrentState()
                     loadLyricsForCurrentSong(id)
                     updateUiLikeState(id)
+                    countPlay(id)
                 }
             }
 

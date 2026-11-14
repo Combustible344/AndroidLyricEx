@@ -32,6 +32,9 @@ fun SettingsScreen(
     onScan: () -> Unit,
     onImportLyrics: (android.net.Uri) -> Unit,
     onOpenGestures: () -> Unit,
+    onOpenSceneEditor: () -> Unit,
+    rankLimit: Int,
+    onRankLimitChange: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = praColors()
@@ -66,6 +69,19 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(PraSpacing.xl))
+        SettingsGroup(title = "首页") {
+            SettingsRow(
+                title = "听歌排行数量",
+                subtitle = "当前显示前 $rankLimit 首，点按切换 5 / 10 / 20 / 50",
+                onClick = {
+                    val choices = com.example.pra.data.prefs.ListeningStatsStore.LIMIT_CHOICES
+                    val next = choices[(choices.indexOf(rankLimit).coerceAtLeast(0) + 1) % choices.size]
+                    onRankLimitChange(next)
+                },
+            )
+        }
+
+        Spacer(Modifier.height(PraSpacing.xl))
         SettingsGroup(title = "外观") {
             SettingsRow(
                 title = "深色（固定）",
@@ -75,6 +91,11 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(PraSpacing.xl))
         SettingsGroup(title = "伪息屏") {
+            SettingsRow(
+                title = "场景编辑器",
+                subtitle = "编辑 scene.lua，保存即生效；附 Lua API 手册",
+                onClick = onOpenSceneEditor,
+            )
             SettingsRow(
                 title = "自定义手势",
                 subtitle = "在息屏中用点击 / 长按 / 滑动控制播放，可自由组合",

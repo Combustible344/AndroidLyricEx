@@ -51,6 +51,7 @@ import com.example.pra.ui.home.HomeScreen
 import com.example.pra.ui.library.LibraryScreen
 import com.example.pra.ui.player.NowPlayingScreen
 import com.example.pra.ui.settings.GestureSettingsScreen
+import com.example.pra.ui.settings.SceneEditorScreen
 import com.example.pra.ui.settings.SettingsScreen
 import com.example.pra.ui.theme.PraMotion
 import com.example.pra.ui.theme.PraShapes
@@ -176,12 +177,31 @@ fun AppRoot(
                 )
             }
 
+            composable(
+                route = "scenes",
+                enterTransition = {
+                    slideInVertically(
+                        initialOffsetY = { it },
+                        animationSpec = tween(PraMotion.Normal, easing = PraMotion.Emphasized),
+                    )
+                },
+                exitTransition = {
+                    slideOutVertically(
+                        targetOffsetY = { it },
+                        animationSpec = tween(PraMotion.Normal, easing = PraMotion.Emphasized),
+                    )
+                },
+            ) {
+                SceneEditorScreen(onBack = { navController.popBackStack() })
+            }
+
             composable("main") {
                 MainScaffold(
                     viewModel = viewModel,
                     state = state,
                     onOpenPlayer = { navController.navigate("player") },
                     onOpenGestures = { navController.navigate("gestures") },
+                    onOpenSceneEditor = { navController.navigate("scenes") },
                     onOverlayChange = onOverlayContentVisibilityChange,
                 )
             }
@@ -195,16 +215,22 @@ private fun MainScaffold(
     state: com.example.pra.ui.state.PlayerUiState,
     onOpenPlayer: () -> Unit,
     onOpenGestures: () -> Unit,
+    onOpenSceneEditor: () -> Unit,
     onOverlayChange: (Boolean) -> Unit,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(tab) { onOverlayChange(false) }
+
+    val playCounts by viewModel.playCounts.collectAsState()
+    val rankLimit by viewModel.rankLimit.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             when (PraTab.entries[tab]) {
                 PraTab.Home -> HomeScreen(
                     state = state,
+                    playCounts = playCounts,
+                    rankLimit = rankLimit,
                     onPlaySong = viewModel::playFromList,
                     onOpenPlayer = onOpenPlayer,
                 )
@@ -223,6 +249,9 @@ private fun MainScaffold(
                     onScan = viewModel::scanAndAppend,
                     onImportLyrics = viewModel::importLyricsFolder,
                     onOpenGestures = onOpenGestures,
+                    onOpenSceneEditor = onOpenSceneEditor,
+                    rankLimit = rankLimit,
+                    onRankLimitChange = viewModel::setRankLimit,
                 )
             }
         }
