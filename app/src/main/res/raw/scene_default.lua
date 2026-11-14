@@ -22,7 +22,7 @@ local CONFIG = {
     baseColor = "#5A5A5A",
     activeColor = "#FFFFFF",
     particleCount = 18,
-    -- 音频频谱柱: 只有设置里打开「音频可视化」时才有非零数据 (关闭时全 0, 不会绘制)
+    -- 音频频谱柱: 播放时自动采集 (无需开关), 暂停/静音时自动不绘制
     spectrumBars = true,
 }
 
@@ -259,7 +259,7 @@ function onDraw(state, env)
     canvas:restore()
     canvas:setAlpha(255)
 
-    -- 可选频谱柱: 默认关闭, 打开 设置里的音频可视化 + 这里的开关才绘制
+    -- 可选频谱柱: 默认开启, 播放中自动有数据 (暂停时为 0, 不会绘制)
     if CONFIG.spectrumBars then
         drawSpectrum(state, w, h)
     end

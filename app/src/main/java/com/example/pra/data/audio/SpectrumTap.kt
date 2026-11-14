@@ -20,9 +20,9 @@ object SpectrumTap {
     private const val FFT_SIZE = 1024
     private const val UPDATE_MS = 33L
 
-    /** 由设置开关控制: 关闭时不拷贝、不分析, 零开销 */
+    /** 无需开关: 播放中即采集 (暂停时自动降频) */
     @Volatile
-    var enabled: Boolean = false
+    var enabled: Boolean = true
         set(value) {
             if (field == value) return
             field = value
@@ -69,6 +69,7 @@ object SpectrumTap {
     /** 音频线程调用: 只取左声道, 归一化后写入环形缓冲 */
     fun push(samples: FloatArray, channels: Int) {
         if (!enabled) return
+        if (analyzer == null) startAnalyzer()
         val ch = channels.coerceAtLeast(1)
         synchronized(lock) {
             var i = 0
@@ -95,7 +96,18 @@ object SpectrumTap {
                 (0.5 - 0.5 * cos(2.0 * PI * i / (FFT_SIZE - 1))).toFloat()
             }
             var lastLog = 0L
+            var lastSamples = -1L
             while (enabled) {
+                // 暂停/静默时没有新样本, 降频空转, 省电
+                if (samplesReceived == lastSamples) {
+                    try {
+                        Thread.sleep(120)
+                    } catch (_: InterruptedException) {
+                        break
+                    }
+                    continue
+                }
+                lastSamples = samplesReceived
                 synchronized(lock) {
                     val start = (writePos - FFT_SIZE).coerceAtLeast(0)
                     for (i in 0 until FFT_SIZE) {

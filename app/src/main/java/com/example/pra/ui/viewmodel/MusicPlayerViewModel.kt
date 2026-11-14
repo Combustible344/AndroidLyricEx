@@ -24,7 +24,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
-import com.example.pra.data.audio.SpectrumTap
 import com.example.pra.data.gesture.GestureBinding
 import com.example.pra.data.gesture.Gestures
 import com.example.pra.data.gesture.PlayerAction
@@ -93,9 +92,7 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     val rankLimit: StateFlow<Int> = statsStore.rankLimit
         .stateIn(viewModelScope, SharingStarted.Eagerly, ListeningStatsStore.DEFAULT_LIMIT)
 
-    /** 音频可视化开关 (B 方案: 从播放管线抓 PCM, 无需录音权限) */
-    val visualizerEnabled: StateFlow<Boolean> = prefsStore.visualizerEnabled
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /** 音频可视化开关: 已取消, 播放即采集 */
 
     private fun PlayerUiState.withFreshPosition(): PlayerUiState {
         val player = mediaController ?: return this
@@ -142,15 +139,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
     init {
         connectToService()
         startMediaObserver()
-        // 开关只控制采集器是否工作; 数据来自服务内的 TapAudioProcessor
-        viewModelScope.launch {
-            visualizerEnabled.collect { enabled -> SpectrumTap.enabled = enabled }
-        }
-    }
-
-    fun setVisualizerEnabled(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) { prefsStore.setVisualizerEnabled(enabled) }
-        SpectrumTap.enabled = enabled
     }
 
     private fun connectToService() {
@@ -985,7 +973,6 @@ class MusicPlayerViewModel(application: Application) : AndroidViewModel(applicat
 
     override fun onCleared() {
         saveCurrentState(isDying = true)
-        SpectrumTap.enabled = false
         mediaObserver?.let { runCatching { context.contentResolver.unregisterContentObserver(it) } }
         mediaObserver = null
         //releaseVisualizer() // 确保释放

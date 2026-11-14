@@ -2,6 +2,43 @@
 
 记录主要修改时间与内容(时间倒序)。
 
+## 2026-11-14 — 包体瘦身 / 听歌排行 / 场景编辑器 / 音频频谱
+
+### 构建与包体
+
+- release 开启 R8 (`minifyEnabled`) + 资源收缩 (`shrinkResources`), debug APK **70.99 MB → release 5.00 MB**, dex 69.58 MB → 4.16 MB
+- 新增 LuaJ 反射保活规则 (`org.luaj.**`、`ui.scene.**` 的 public 成员、渲染器实现、前台服务), 否则场景脚本会在 release 包中静默失效
+- 没有 `keystore.properties` 时 release 自动退回 debug 签名, 方便本地装机验证; 正式分发前需配好 keystore
+
+### 首页听歌排行
+
+- 新增 `ListeningStatsStore` (DataStore): 每首歌累计播放次数 + 排行显示条数
+- 计数规则: 主动点播与自动切歌各计一次, 同一首重播不重复累加, 冷启动恢复现场不计数
+- 首页「最近添加」改为「听歌排行」: 名次(前三名强调色)、封面、播放次数
+- 设置 → 首页 → 听歌排行数量: 点按在 5 / 10 / 20 / 50 之间切换, 默认 10
+
+### 播放修复
+
+- 修复播放中在首页/曲库再次点击同一首歌会把进度重置为 0: 改为只恢复播放, 不重建队列 (实测点击后位置保持 3.9s 继续播放)
+
+### 场景编辑器 v1
+
+- 设置 → 伪息屏 → 场景编辑器: 直接编辑设备上的 `lua_scripts/scene.lua`, 等宽字体、可滚动
+- 保存即生效: 复用已有的 `FileObserver(CLOSE_WRITE)` 热重载, 无需重启
+- 支持「恢复默认」写回内置模板、「API 手册」切换 `scene_guide.md`、脚本报错时展示 `scene_error.log`
+
+### 音频频谱可视化
+
+- 先尝试 `Visualizer` 方案: 该 ROM 对会话与全局混音均返回 `ERROR_NO_INIT (-3)`, 已整体移除并删除 `RECORD_AUDIO` 权限
+- 改为从播放管线内部采集:
+  - `TapAudioProcessor`: 挂在 AudioSink 前端的旁路处理器, 原样放行音频并拷贝 PCM (16-bit / float)
+  - `SpectrumTap`: 环形缓冲 + 1024 点基-2 FFT + 汉宁窗, 每 33ms 输出 16 条柱子与 bass/mid/treble/level
+  - 自适应归一化: 跟踪曲目峰值包络 + sqrt 压缩, 换歌无需重调增益
+- 场景脚本注入: `state.spectrum[1..16]`、`state.bass/mid/treble/level`、`state.hasSpectrum`; 无开关, 播放时自动采集
+- 默认场景频谱柱 (`CONFIG.spectrumBars`, 默认开启): 画在时钟上方的窄带里, 暂停/静音时数值为 0, 自动不绘制
+- `scene_guide.md` 新增「音频频谱可视化」章节与可复制示例
+- 实测: `SpectrumTap` 每秒接收约 88k PCM 采样, 柱子数值稳定在 0.01–0.67, 与场景引擎读到的值一致
+
 ## 2026-11-14 — 前端重设计 + 播放层重构 + 伪息屏修复与手势系统
 
 ### 概览

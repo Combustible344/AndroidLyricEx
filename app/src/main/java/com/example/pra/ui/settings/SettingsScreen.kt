@@ -35,8 +35,6 @@ fun SettingsScreen(
     onOpenSceneEditor: () -> Unit,
     rankLimit: Int,
     onRankLimitChange: (Int) -> Unit,
-    visualizerEnabled: Boolean,
-    onToggleVisualizer: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = praColors()
@@ -93,15 +91,6 @@ fun SettingsScreen(
 
         Spacer(Modifier.height(PraSpacing.xl))
         SettingsGroup(title = "伪息屏") {
-            SettingsRow(
-                title = "音频可视化（实验）",
-                subtitle = if (visualizerEnabled) {
-                    "已开启：从播放管线采集频谱，场景脚本可读取"
-                } else {
-                    "关闭：开启后伪息屏可按节拍做效果（无需录音权限）"
-                },
-                onClick = { onToggleVisualizer(!visualizerEnabled) },
-            )
             SettingsRow(
                 title = "场景编辑器",
                 subtitle = "编辑 scene.lua，保存即生效；附 Lua API 手册",
