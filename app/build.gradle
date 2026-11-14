@@ -39,9 +39,15 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            // R8 裁剪 + 资源收缩: 主力瘦身手段 (图标库 45 MB、未用依赖全部剔除)
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.release_config
+            // 本地没有 keystore.properties 时退回 debug 签名, 方便直接装机验证 release 包;
+            // 有正式 keystore 时仍使用 release_config
+            signingConfig keystoreProps.getProperty('storeFile') != null
+                    ? signingConfigs.release_config
+                    : signingConfigs.debug
         }
     }
     compileOptions {
