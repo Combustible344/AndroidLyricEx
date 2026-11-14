@@ -75,6 +75,18 @@ object Gestures {
     val defaults: List<GestureBinding> = listOf(
         GestureBinding(listOf(GestureStep(GesturePrimitive.Tap, repeat = 2)), PlayerAction.PlayPause),
         GestureBinding(listOf(GestureStep(GesturePrimitive.LongPress, holdMs = 500)), PlayerAction.PlayPause),
+        // 单指滑动 = 拖动进度: 右滑快进, 左滑快退
+        GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeRight, repeat = 1)), PlayerAction.SeekForward),
+        GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeLeft, repeat = 1)), PlayerAction.SeekBackward),
+        // 连滑两次 = 切歌: 右滑两次上一首, 左滑两次下一首
+        GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeRight, repeat = 2)), PlayerAction.Previous),
+        GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeLeft, repeat = 2)), PlayerAction.Next),
+    )
+
+    /** 旧版默认绑定 (左右滑动含义相反), 用于自动迁移 */
+    val legacyDefaults: List<GestureBinding> = listOf(
+        GestureBinding(listOf(GestureStep(GesturePrimitive.Tap, repeat = 2)), PlayerAction.PlayPause),
+        GestureBinding(listOf(GestureStep(GesturePrimitive.LongPress, holdMs = 500)), PlayerAction.PlayPause),
         GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeLeft, repeat = 1)), PlayerAction.Next),
         GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeRight, repeat = 1)), PlayerAction.Previous),
         GestureBinding(listOf(GestureStep(GesturePrimitive.SwipeLeft, repeat = 2)), PlayerAction.SeekForward),

@@ -18,7 +18,13 @@ class GestureSettingsStore(private val context: Context) {
 
     val bindings: Flow<List<GestureBinding>> = context.gestureDataStore.data.map { data ->
         val raw = data[key]
-        if (raw.isNullOrBlank()) Gestures.defaults else Gestures.decode(raw)
+        if (raw.isNullOrBlank()) {
+            Gestures.defaults
+        } else {
+            val decoded = Gestures.decode(raw)
+            // 旧版默认绑定 (左右滑动含义相反) 自动升级到新默认
+            if (decoded == Gestures.legacyDefaults) Gestures.defaults else decoded
+        }
     }
 
     suspend fun save(bindings: List<GestureBinding>) {

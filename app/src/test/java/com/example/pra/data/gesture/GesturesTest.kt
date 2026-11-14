@@ -105,8 +105,19 @@ class GesturesTest {
         val doubleTap = tokens(GesturePrimitive.Tap, GesturePrimitive.Tap)
         assertEquals(PlayerAction.PlayPause, Gestures.resolve(Gestures.defaults, doubleTap))
         assertEquals(
-            PlayerAction.Next,
+            PlayerAction.SeekBackward,
             Gestures.resolve(Gestures.defaults, tokens(GesturePrimitive.SwipeLeft)),
+        )
+        assertEquals(
+            PlayerAction.SeekForward,
+            Gestures.resolve(Gestures.defaults, tokens(GesturePrimitive.SwipeRight)),
+        )
+        assertEquals(
+            PlayerAction.Next,
+            Gestures.resolve(
+                Gestures.defaults,
+                tokens(GesturePrimitive.SwipeLeft, GesturePrimitive.SwipeLeft),
+            ),
         )
         assertNull(Gestures.resolve(Gestures.defaults, tokens(GesturePrimitive.SwipeUp)))
     }
